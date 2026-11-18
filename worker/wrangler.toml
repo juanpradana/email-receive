@@ -1,0 +1,9 @@
+name = "email-receive-forwarder"
+main = "src/index.ts"
+compatibility_date = "2026-11-01"
+
+# INGEST_HMAC_SECRET is a secret, not a var: `npx wrangler secret put INGEST_HMAC_SECRET`
+# Route the tenant domains to this Worker in the Cloudflare Email Routing dashboard.
+[vars]
+INGEST_URL = "https://mail.example.com/v1/ingest"
+MAX_BYTES = "26214400"
