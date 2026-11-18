@@ -89,6 +89,21 @@ describe("admin provisioning", () => {
     expect(dup.statusCode).toBe(409);
   });
 
+  it("returns 400 with details for an invalid body instead of 500", async () => {
+    const tenant = await createTenant("Acme");
+    const res = await app.inject({
+      method: "POST",
+      url: `/v1/admin/tenants/${tenant.id}/domains`,
+      headers: admin,
+      payload: { domain: "not a domain" },
+    });
+    expect(res.statusCode).toBe(400);
+    const body = res.json();
+    expect(body.error).toBe("validation_error");
+    expect(body.details.length).toBeGreaterThan(0);
+    expect(db.prepare("SELECT count(*) AS n FROM tenant_domains").get()).toEqual({ n: 0 });
+  });
+
   it("returns 404 for an unknown tenant", async () => {
     const res = await app.inject({
       method: "POST",

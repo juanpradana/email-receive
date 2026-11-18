@@ -55,26 +55,33 @@ export function createIngestService(deps: {
 
       const sha256 = createHash("sha256").update(input.bytes).digest("hex");
       const windowStart = new Date(now.getTime() - deps.dedupeWindowHours * 3_600_000).toISOString();
-      const existing = messages.findDuplicate(tenant.id, sha256, windowStart);
-      if (existing) return { id: existing.id, duplicate: true };
-
       const id = randomUUID();
       const rawPath = await deps.storage.putRaw(id, input.bytes);
+      let inserted: { row: { id: string }; duplicate: boolean };
       try {
-        messages.insert({
-          id,
-          tenantId: tenant.id,
-          envelopeFrom: input.envelopeFrom,
-          envelopeTo: input.envelopeTo,
-          recipientDomain: domain,
-          sha256,
-          receivedAt: input.receivedAt ?? now.toISOString(),
-          sizeBytes: input.bytes.length,
-          rawPath,
-        });
+        // Check and insert share one synchronous transaction, so two worker
+        // retries that reach this point together cannot both create a row.
+        inserted = messages.insertIfNew(
+          {
+            id,
+            tenantId: tenant.id,
+            envelopeFrom: input.envelopeFrom,
+            envelopeTo: input.envelopeTo,
+            recipientDomain: domain,
+            sha256,
+            receivedAt: input.receivedAt ?? now.toISOString(),
+            sizeBytes: input.bytes.length,
+            rawPath,
+          },
+          windowStart,
+        );
       } catch (error) {
         await deps.storage.delete(rawPath).catch(() => undefined);
         throw error;
+      }
+      if (inserted.duplicate) {
+        await deps.storage.delete(rawPath).catch(() => undefined);
+        return { id: inserted.row.id, duplicate: true };
       }
       return { id, duplicate: false };
     },

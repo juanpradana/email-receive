@@ -23,6 +23,7 @@ export interface ForwardOptions {
 
 const DEFAULT_MAX_BYTES = 26_214_400;
 const RETRY_DELAYS_MS = [250, 1000, 2500] as const;
+const REQUEST_TIMEOUT_MS = 15_000;
 
 function defaultSleep(milliseconds: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -85,6 +86,7 @@ async function sendWithRetry(
         },
         body: new Uint8Array(body),
         redirect: "error",
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
 
       if (response.ok) return;

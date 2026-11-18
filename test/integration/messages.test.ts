@@ -118,6 +118,22 @@ describe("message read API", () => {
     expect(second.json().messages.map((m: { id: string }) => m.id)).toEqual(["m-a"]);
   });
 
+  it("keeps paging past a full page at the maximum limit", async () => {
+    const tenant = await createTenant("Alice");
+    for (let index = 0; index < 101; index += 1) {
+      const stamp = new Date(Date.UTC(2026, 10, 18, 0, 0, 0) + index * 60_000).toISOString();
+      insertMessage(tenant.id, `m-${index}`, stamp, `body ${index}`);
+    }
+    const first = await authorize(tenant.id, tenant.key, "/v1/messages?limit=100");
+    expect(first.statusCode).toBe(200);
+    expect(first.json().messages).toHaveLength(100);
+    const cursor = first.json().nextCursor as string;
+    expect(cursor).not.toBeNull();
+    const second = await authorize(tenant.id, tenant.key, `/v1/messages?limit=100&cursor=${encodeURIComponent(cursor)}`);
+    expect(second.json().messages.map((m: { id: string }) => m.id)).toEqual(["m-0"]);
+    expect(second.json().nextCursor).toBeNull();
+  });
+
   it("excludes soft-deleted messages", async () => {
     const tenant = await createTenant("Alice");
     insertMessage(tenant.id, "gone", "2026-11-18T10:00:00.000Z", "deleted");
@@ -159,6 +175,20 @@ describe("message read API", () => {
     const download = await authorize(tenant.id, tenant.key, `/v1/messages/parsed-message/attachments/${attachments[0]!.id}`);
     expect(download.statusCode).toBe(200);
     expect(download.body).toBe("one file");
+  });
+
+  it("sends a non-Latin attachment filename without crashing the response", async () => {
+    const tenant = await createTenant("Alice");
+    const message = insertMessage(tenant.id, "cjk-msg", "2026-11-18T10:00:00.000Z", "body");
+    const attachmentPath = await storage.putAttachment(message.id, 0, "laporan.txt", Buffer.from("isi"));
+    db.prepare(`INSERT INTO attachments (id, message_id, part_index, filename, content_type, size_bytes, path)
+      VALUES ('att-cjk', ?, 0, '日本語のレポート.pdf', 'application/pdf', 3, ?)`).run(message.id, attachmentPath);
+
+    const response = await authorize(tenant.id, tenant.key, "/v1/messages/cjk-msg/attachments/att-cjk");
+    expect(response.statusCode).toBe(200);
+    const disposition = response.headers["content-disposition"] as string;
+    expect(disposition).toContain(`filename*=UTF-8''${encodeURIComponent("日本語のレポート.pdf")}`);
+    expect(disposition).toMatch(/filename="[\x20-\x7e]*"/);
   });
 
   it("keeps raw downloadable when parsing fails", async () => {

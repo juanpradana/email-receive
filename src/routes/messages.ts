@@ -5,7 +5,7 @@ import { createApiKeysRepo } from "../db/repo/apiKeys.js";
 import type { MessageRow } from "../db/repo/messages.js";
 import { createMessagesRepo } from "../db/repo/messages.js";
 import { decodeCursor, encodeCursor } from "../lib/cursor.js";
-import { sanitizeFilename } from "../lib/fsSafe.js";
+import { contentDisposition } from "../lib/fsSafe.js";
 
 interface AttachmentRow {
   id: string;
@@ -142,7 +142,7 @@ export const messageRoutes: FastifyPluginAsync = async (app) => {
     if (!bytes) return reply.code(404).send({ error: "raw_not_found" });
     return reply
       .header("content-type", "message/rfc822")
-      .header("content-disposition", `attachment; filename="${sanitizeFilename(`${row.id}.eml`)}"`)
+      .header("content-disposition", contentDisposition(`${row.id}.eml`))
       .header("x-content-type-options", "nosniff")
       .send(bytes);
   });
@@ -155,7 +155,7 @@ export const messageRoutes: FastifyPluginAsync = async (app) => {
     if (!bytes) return reply.code(404).send({ error: "attachment_not_found" });
     return reply
       .header("content-type", attachment.content_type || "application/octet-stream")
-      .header("content-disposition", `attachment; filename="${sanitizeFilename(attachment.filename)}"`)
+      .header("content-disposition", contentDisposition(attachment.filename))
       .header("x-content-type-options", "nosniff")
       .send(bytes);
   });

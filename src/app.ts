@@ -1,6 +1,7 @@
 import type Database from "better-sqlite3";
 import type { FastifyInstance } from "fastify";
 import Fastify from "fastify";
+import { ZodError } from "zod";
 import type { AppConfig } from "./config.js";
 import type { Storage } from "./services/storage.js";
 import { requireAdminToken } from "./auth/apiKey.js";
@@ -26,6 +27,17 @@ export function buildApp(deps: AppDependencies): FastifyInstance {
   });
 
   app.decorate("deps", deps);
+  app.setErrorHandler((error, request, reply) => {
+    if (error instanceof ZodError) {
+      return reply.code(400).send({
+        error: "validation_error",
+        details: error.issues.map((issue) => ({ path: issue.path.join("."), message: issue.message })),
+      });
+    }
+    request.log.error({ err: error }, "request failed");
+    const statusCode = (error as { statusCode?: number }).statusCode ?? 500;
+    return reply.code(statusCode).send({ error: statusCode >= 500 ? "internal_error" : "request_error" });
+  });
   app.addContentTypeParser("message/rfc822", { parseAs: "buffer" }, (_request, body, done) => {
     done(null, body);
   });

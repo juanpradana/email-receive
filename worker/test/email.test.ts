@@ -103,6 +103,18 @@ describe("cloudflare email worker", () => {
     expect(sleep.mock.calls).toEqual([[250], [1000], [2500]]);
   });
 
+  it("gives every ingest attempt a timeout signal", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("", { status: 202 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { message } = makeMessage(Buffer.from("Subject: Hi\r\n\r\nHello\r\n"));
+    await forwardEmail(message, env, { sleep: noSleep, now: clock });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+    expect((init.signal as AbortSignal).aborted).toBe(false);
+  });
+
   it("does not retry a permanent 404 and throws", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response("", { status: 404 }));
     vi.stubGlobal("fetch", fetchMock);

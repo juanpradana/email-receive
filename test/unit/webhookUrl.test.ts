@@ -16,9 +16,24 @@ describe("webhook URL safety", () => {
     await expect(assertSafeWebhookUrl(url, false)).rejects.toThrow();
   });
 
+  it.each([
+    "https://[::ffff:7f00:1]/h",
+    "https://[::ffff:a00:1]/h",
+    "https://[::ffff:a9fe:a9fe]/h",
+    "https://[::7f00:1]/h",
+    "https://[fec0::1]/h",
+    "https://[2002:7f00:1::]/h",
+    "https://[64:ff9b::7f00:1]/h",
+  ])("rejects private IPv6 literals in alternate encodings: %s", async (url) => {
+    await expect(assertSafeWebhookUrl(url, false)).rejects.toThrow(/private/i);
+  });
+
   it("accepts a public https URL and rejects credentials in the URL", async () => {
     await expect(
       assertSafeWebhookUrl("https://hooks.example.com/inbound", false, async () => ["93.184.216.34"]),
+    ).resolves.toBeUndefined();
+    await expect(
+      assertSafeWebhookUrl("https://[2606:2800:220:1:248:1893:25c8:1946]/inbound", false),
     ).resolves.toBeUndefined();
     await expect(
       assertSafeWebhookUrl("https://user:pass@hooks.example.com/inbound", false, async () => ["93.184.216.34"]),

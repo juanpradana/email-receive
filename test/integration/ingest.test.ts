@@ -54,7 +54,7 @@ afterEach(async () => {
   rmSync(root, { recursive: true, force: true });
 });
 
-function ingestRequest(body: string, overrides: { to?: string; contentType?: string; signedBody?: string; tenantSecret?: string } = {}) {
+function ingestRequest(body: string, overrides: { to?: string; contentType?: string; signedBody?: string; tenantSecret?: string; receivedAt?: string } = {}) {
   const bytes = Buffer.from(body);
   const now = Math.floor(Date.now() / 1000);
   return app.inject({
@@ -64,6 +64,7 @@ function ingestRequest(body: string, overrides: { to?: string; contentType?: str
       "content-type": overrides.contentType ?? "message/rfc822",
       "x-envelope-from": "sender@example.test",
       "x-envelope-to": overrides.to ?? "inbox@mail.acme.test",
+      ...(overrides.receivedAt ? { "x-received-at": overrides.receivedAt } : {}),
       "x-ingest-signature": buildIngestHeader(
         overrides.tenantSecret ?? secret,
         now,
@@ -92,6 +93,26 @@ describe("POST /v1/ingest", () => {
     expect(first.statusCode).toBe(202);
     expect(second.statusCode).toBe(200);
     expect(second.json()).toEqual({ id: first.json().id, status: "pending", duplicate: true });
+    expect(db.prepare("SELECT count(*) AS n FROM messages").get()).toEqual({ n: 1 });
+    expect(readdirSync(path.join(root, "raw"), { recursive: true }).filter((e) => String(e).endsWith(".eml"))).toHaveLength(1);
+  });
+
+  it("dedupes against the server clock even when the sender sets an old X-Received-At", async () => {
+    const old = "2020-01-01T00:00:00.000Z";
+    const first = await ingestRequest("Subject: Old\r\n\r\nBody", { receivedAt: old });
+    const second = await ingestRequest("Subject: Old\r\n\r\nBody", { receivedAt: old });
+    expect(first.statusCode).toBe(202);
+    expect(second.statusCode).toBe(200);
+    expect(second.json().duplicate).toBe(true);
+    expect(db.prepare("SELECT count(*) AS n FROM messages").get()).toEqual({ n: 1 });
+  });
+
+  it("does not store the same body twice when two retries arrive at once", async () => {
+    const body = "Subject: Race\r\n\r\nBody";
+    const [first, second] = await Promise.all([ingestRequest(body), ingestRequest(body)]);
+    const statuses = [first.statusCode, second.statusCode].sort();
+    expect(statuses).toEqual([200, 202]);
+    expect(first.json().id).toBe(second.json().id);
     expect(db.prepare("SELECT count(*) AS n FROM messages").get()).toEqual({ n: 1 });
     expect(readdirSync(path.join(root, "raw"), { recursive: true }).filter((e) => String(e).endsWith(".eml"))).toHaveLength(1);
   });

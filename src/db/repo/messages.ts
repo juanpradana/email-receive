@@ -47,8 +47,19 @@ export interface MessageFilter {
   subject?: string;
 }
 
+export interface InsertResult {
+  row: MessageRow;
+  duplicate: boolean;
+}
+
 export interface MessagesRepo {
   insert(row: NewMessage): MessageRow;
+  /**
+   * Inserts unless a message with the same tenant + sha256 was created at or
+   * after `sinceIso`. The check and the insert run in one synchronous
+   * transaction so two concurrent retries cannot both insert.
+   */
+  insertIfNew(row: NewMessage, sinceIso: string): InsertResult;
   findById(tenantId: string, id: string): MessageRow | undefined;
   findDuplicate(tenantId: string, sha256: string, sinceIso: string): MessageRow | undefined;
   list(tenantId: string, filter: MessageFilter): MessageRow[];
@@ -76,6 +87,14 @@ export function createMessagesRepo(db: Database.Database): MessagesRepo {
       return this.findById(row.tenantId, row.id)!;
     },
 
+    insertIfNew(row, sinceIso) {
+      return db.transaction((): InsertResult => {
+        const existing = this.findDuplicate(row.tenantId, row.sha256, sinceIso);
+        if (existing) return { row: existing, duplicate: true };
+        return { row: this.insert(row), duplicate: false };
+      })();
+    },
+
     findById(tenantId, id) {
       return db.prepare("SELECT * FROM messages WHERE tenant_id = ? AND id = ? AND deleted_at IS NULL").get(
         tenantId,
@@ -84,15 +103,19 @@ export function createMessagesRepo(db: Database.Database): MessagesRepo {
     },
 
     findDuplicate(tenantId, sha256, sinceIso) {
+      // The window is measured on created_at (server clock), not received_at,
+      // because received_at can be supplied by the sender via X-Received-At.
       return db
         .prepare(
-          "SELECT * FROM messages WHERE tenant_id = ? AND sha256 = ? AND received_at >= ? AND deleted_at IS NULL ORDER BY received_at DESC LIMIT 1",
+          "SELECT * FROM messages WHERE tenant_id = ? AND sha256 = ? AND created_at >= ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1",
         )
         .get(tenantId, sha256, sinceIso) as MessageRow | undefined;
     },
 
     list(tenantId, filter) {
-      const limit = Math.min(Math.max(filter.limit ?? 50, 1), 100);
+      // Routes validate the page size (1..100) and pass limit+1 to detect a
+      // following page; only the lower bound and a sanity ceiling belong here.
+      const limit = Math.min(Math.max(filter.limit ?? 50, 1), 1000);
       const clauses = ["tenant_id = ?", "deleted_at IS NULL"];
       const params: unknown[] = [tenantId];
       if (filter.from) {
