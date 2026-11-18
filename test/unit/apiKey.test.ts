@@ -48,7 +48,8 @@ describe("api keys", () => {
     expect(keys.findActiveByPrefix(generated.prefix)).toHaveLength(0);
   });
 
-  it("generates keys that do not collide", () => {
+  // 50 scrypt derivations need headroom when the full suite occupies every worker.
+  it("generates keys that do not collide", { timeout: 30_000 }, () => {
     const seen = new Set<string>();
     for (let i = 0; i < 50; i++) {
       const key = generateApiKey();

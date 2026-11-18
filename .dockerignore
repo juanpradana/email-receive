@@ -1,0 +1,10 @@
+node_modules
+dist
+data
+coverage
+.superpowers
+.git
+.env
+.env.*
+worker/node_modules
+worker/.wrangler

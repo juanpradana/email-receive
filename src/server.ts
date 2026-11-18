@@ -5,11 +5,14 @@ import { loadConfig } from "./config.js";
 import { createLocalStorage } from "./services/storage.js";
 import { processPending } from "./services/pipeline.js";
 import { deliverPending } from "./services/webhooks.js";
+import { purgeExpired } from "./jobs/retention.js";
 
 const PIPELINE_INTERVAL_MS = 5_000;
 const WEBHOOK_INTERVAL_MS = 2_000;
+const RETENTION_INTERVAL_MS = 60 * 60 * 1000;
 const PIPELINE_BATCH = 25;
 const WEBHOOK_BATCH = 25;
+const RETENTION_BATCH = 100;
 
 const config = loadConfig();
 const db = openDb(config.dbPath);
@@ -27,8 +30,13 @@ try {
 
 let pipelineRunning = true;
 let webhookRunning = true;
+let retentionRunning = true;
 let pipelineTimer: NodeJS.Timeout | undefined;
 let webhookTimer: NodeJS.Timeout | undefined;
+let retentionTimer: NodeJS.Timeout | undefined;
+let pipelineInFlight: Promise<void> | undefined;
+let webhookInFlight: Promise<void> | undefined;
+let retentionInFlight: Promise<void> | undefined;
 
 async function runPipeline(): Promise<void> {
   while (pipelineRunning) {
@@ -49,7 +57,10 @@ async function runPipeline(): Promise<void> {
 async function runWebhooks(): Promise<void> {
   if (webhookRunning) {
     try {
-      await deliverPending(db, WEBHOOK_BATCH, { allowPrivate: config.webhookAllowPrivate, maxAttempts: config.webhookMaxAttempts });
+      await deliverPending(db, WEBHOOK_BATCH, {
+        allowPrivate: config.webhookAllowPrivate,
+        maxAttempts: config.webhookMaxAttempts,
+      });
     } catch (error) {
       app.log.error(error, "Webhook delivery iteration failed");
     }
@@ -60,17 +71,44 @@ async function runWebhooks(): Promise<void> {
   }
 }
 
-if (process.env.NODE_ENV !== "test") {
-  void runPipeline();
-  void runWebhooks();
+async function runRetention(): Promise<void> {
+  if (retentionRunning && config.retentionDays > 0) {
+    try {
+      const removed = await purgeExpired(db, storage, config.retentionDays, new Date());
+      if (removed > 0) app.log.info({ removed }, "Retention purge removed messages");
+    } catch (error) {
+      app.log.error(error, "Retention purge failed");
+    }
+  }
+  if (retentionRunning) {
+    retentionTimer = setTimeout(() => void runRetention(), RETENTION_INTERVAL_MS);
+    retentionTimer.unref();
+  }
 }
 
+if (process.env.NODE_ENV !== "test") {
+  pipelineInFlight = runPipeline();
+  webhookInFlight = runWebhooks();
+  retentionInFlight = runRetention();
+}
+
+let shuttingDown = false;
+
 const shutdown = async () => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+
   pipelineRunning = false;
   webhookRunning = false;
+  retentionRunning = false;
   if (pipelineTimer) clearTimeout(pipelineTimer);
   if (webhookTimer) clearTimeout(webhookTimer);
+  if (retentionTimer) clearTimeout(retentionTimer);
+
+  // Stop accepting new requests first, then let the background loops drain
+  // their current iteration before closing the database they are using.
   await app.close();
+  await Promise.allSettled([pipelineInFlight, webhookInFlight, retentionInFlight]);
   db.close();
 };
 

@@ -1,0 +1,17 @@
+# HTTPS termination for the ingest, read and admin API.
+# Replace mail.example.com with the hostname in PUBLIC_BASE_URL, then:
+#   caddy run --config Caddyfile.example
+mail.example.com {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:3000 {
+		header_up X-Forwarded-Proto {scheme}
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+	}
+	log {
+		output file /var/log/caddy/email-receive.log
+		format json
+	}
+}
