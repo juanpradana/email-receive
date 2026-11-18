@@ -3,6 +3,7 @@ import { newId } from "../db/client.js";
 import type { MessageRow } from "../db/repo/messages.js";
 import { createMessagesRepo } from "../db/repo/messages.js";
 import { parseEmail, type ParsedEmail } from "./parse.js";
+import { enqueueMessageWebhooks } from "./webhooks.js";
 import type { Storage } from "./storage.js";
 
 const SNIPPET_LENGTH = 200;
@@ -23,6 +24,7 @@ async function persistParsed(
   storage: Storage,
   message: MessageRow,
   parsed: ParsedEmail,
+  publicBaseUrl: string,
 ): Promise<void> {
   const written: string[] = [];
   try {
@@ -94,6 +96,8 @@ async function persistParsed(
         htmlPath,
         messageIdHeader: parsed.messageId,
       });
+
+      enqueueMessageWebhooks(db, message.tenant_id, message.id, publicBaseUrl);
     })();
   } catch (error) {
     for (const path of written) {
@@ -103,7 +107,12 @@ async function persistParsed(
   }
 }
 
-export async function processPending(db: Database.Database, storage: Storage, limit: number): Promise<number> {
+export async function processPending(
+  db: Database.Database,
+  storage: Storage,
+  limit: number,
+  publicBaseUrl = "",
+): Promise<number> {
   const messages = createMessagesRepo(db);
   const pending = messages.listPending(limit);
   let stored = 0;
@@ -112,7 +121,7 @@ export async function processPending(db: Database.Database, storage: Storage, li
     try {
       const raw = await storage.read(message.raw_path);
       const parsed = await parseEmail(raw);
-      await persistParsed(db, storage, message, parsed);
+      await persistParsed(db, storage, message, parsed, publicBaseUrl);
       stored += 1;
     } catch (error) {
       messages.markFailed(message.tenant_id, message.id, errorMessage(error));
