@@ -1,0 +1,23 @@
+From: Files <files@example.test>
+To: inbox@example.test
+Subject: Two files
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="mixed-boundary"
+
+--mixed-boundary
+Content-Type: text/plain; charset=UTF-8
+
+See attached.
+--mixed-boundary
+Content-Type: text/plain; name="one.txt"
+Content-Disposition: attachment; filename="one.txt"
+Content-Transfer-Encoding: base64
+
+b25lIGZpbGU=
+--mixed-boundary
+Content-Type: application/octet-stream; name="two.bin"
+Content-Disposition: attachment; filename="two.bin"
+Content-Transfer-Encoding: base64
+
+dHdvIGZpbGU=
+--mixed-boundary--

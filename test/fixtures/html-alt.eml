@@ -1,0 +1,16 @@
+From: Bob <bob@example.test>
+To: team@example.test
+Cc: ops@example.test
+Subject: Alternative body
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="alt-boundary"
+
+--alt-boundary
+Content-Type: text/plain; charset=UTF-8
+
+Plain version wins for automation.
+--alt-boundary
+Content-Type: text/html; charset=UTF-8
+
+<p>HTML version retained.</p>
+--alt-boundary--

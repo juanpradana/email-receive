@@ -1,0 +1,7 @@
+From: Alice Example <alice@example.test>
+To: inbox@example.test
+Subject: Hello plain
+Message-ID: <plain-1@example.test>
+Content-Type: text/plain; charset=UTF-8
+
+Plain message body.

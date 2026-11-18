@@ -1,0 +1,6 @@
+From: ?? broken address
+Subject this header has no colon
+To: not-an-address
+Content-Type: text/plain; charset=UTF-8
+
+Body is still useful.
