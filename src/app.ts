@@ -7,6 +7,7 @@ import { requireAdminToken } from "./auth/apiKey.js";
 import { healthRoutes } from "./routes/health.js";
 import { adminRoutes } from "./routes/admin.js";
 import { ingestRoutes } from "./routes/ingest.js";
+import { messageRoutes } from "./routes/messages.js";
 
 export interface AppDependencies {
   config: AppConfig;
@@ -29,6 +30,7 @@ export function buildApp(deps: AppDependencies): FastifyInstance {
   });
   app.register(healthRoutes);
   app.register(ingestRoutes);
+  app.register(messageRoutes);
 
   app.register(async (adminApp) => {
     adminApp.addHook("preHandler", requireAdminToken(deps.config.adminBootstrapToken));
