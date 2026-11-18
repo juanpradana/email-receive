@@ -3,7 +3,9 @@ import type { FastifyInstance } from "fastify";
 import Fastify from "fastify";
 import type { AppConfig } from "./config.js";
 import type { Storage } from "./services/storage.js";
+import { requireAdminToken } from "./auth/apiKey.js";
 import { healthRoutes } from "./routes/health.js";
+import { adminRoutes } from "./routes/admin.js";
 
 export interface AppDependencies {
   config: AppConfig;
@@ -21,7 +23,12 @@ export function buildApp(deps: AppDependencies): FastifyInstance {
   });
 
   app.decorate("deps", deps);
-  app.register(healthRoutes, { prefix: "/" });
+  app.register(healthRoutes);
+
+  app.register(async (adminApp) => {
+    adminApp.addHook("preHandler", requireAdminToken(deps.config.adminBootstrapToken));
+    adminApp.register(adminRoutes);
+  });
 
   return app;
 }
