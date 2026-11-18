@@ -1,0 +1,10 @@
+node_modules/
+dist/
+data/
+.env
+.env.*
+!.env.example
+.superpowers/
+coverage/
+worker/node_modules/
+worker/.wrangler/
