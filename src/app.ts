@@ -1,27 +1,61 @@
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import type Database from "better-sqlite3";
 import type { FastifyInstance } from "fastify";
 import Fastify from "fastify";
 import { ZodError } from "zod";
 import type { AppConfig } from "./config.js";
 import type { Storage } from "./services/storage.js";
+import type { MailProvider } from "./services/mail/provider.js";
 import { requireAdminToken } from "./auth/apiKey.js";
 import { healthRoutes } from "./routes/health.js";
 import { adminRoutes } from "./routes/admin.js";
 import { ingestRoutes } from "./routes/ingest.js";
 import { messageRoutes } from "./routes/messages.js";
+import { outboundRoutes } from "./routes/outbound.js";
 import { webhookRoutes } from "./routes/webhooks.js";
 
 export interface AppDependencies {
   config: AppConfig;
   db: Database.Database;
   storage: Storage;
+  /** Outbound mail provider. Null when RESEND_API_KEY is unset; routes then answer 503. */
+  mailProvider?: MailProvider | null;
+  /** Directory the webmail SPA is built into; when present, it is served as static files. */
+  webDist?: string;
+}
+
+/** Serves the built webmail SPA from `webDist` if that directory exists. */
+async function serveStaticFiles(app: FastifyInstance, root: string, webDist?: string): Promise<void> {
+  if (!webDist || !existsSync(webDist)) return;
+
+  const { default: fastifyStatic } = await import("@fastify/static");
+  await app.register(fastifyStatic, {
+    root: webDist,
+    index: "index.html",
+  });
+  // Any GET that is not an API route or a real static asset falls through to
+  // index.html so the SPA router can take over.
+  app.setNotFoundHandler((request, reply) => {
+    if (request.method === "GET" && !request.url.startsWith("/v1")) {
+      return reply.sendFile("index.html");
+    }
+    return reply.code(404).send({ error: "not_found" });
+  });
 }
 
 export function buildApp(deps: AppDependencies): FastifyInstance {
   const app = Fastify({
     logger: {
       level: process.env.LOG_LEVEL ?? "info",
-      redact: ["req.headers.authorization", "req.headers.x-ingest-signature"],
+      redact: [
+        "req.headers.authorization",
+        "req.headers.x-ingest-signature",
+        "err.config.headers.Authorization",
+        "err.config.headers.authorization",
+        "err.request.headers.Authorization",
+        "err.request.headers.authorization",
+      ],
     },
     bodyLimit: deps.config.maxMessageBytes,
   });
@@ -44,11 +78,17 @@ export function buildApp(deps: AppDependencies): FastifyInstance {
   app.register(healthRoutes);
   app.register(ingestRoutes);
   app.register(messageRoutes);
+  app.register(outboundRoutes);
   app.register(webhookRoutes);
 
   app.register(async (adminApp) => {
     adminApp.addHook("preHandler", requireAdminToken(deps.config.adminBootstrapToken));
     adminApp.register(adminRoutes);
+  });
+
+  // Static webmail is registered last so API routes are matched first.
+  app.register(async () => {
+    await serveStaticFiles(app, process.cwd(), deps.webDist ?? resolve(process.cwd(), "web/dist"));
   });
 
   return app;

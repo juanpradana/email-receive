@@ -8,3 +8,5 @@ data/
 coverage/
 worker/node_modules/
 worker/.wrangler/
+web/node_modules/
+web/dist/

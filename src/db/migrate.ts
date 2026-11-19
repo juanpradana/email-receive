@@ -117,6 +117,55 @@ CREATE INDEX webhook_deliveries_endpoint ON webhook_deliveries(endpoint_id, crea
   },
 ];
 
+const OUTBOUND_SQL = `
+CREATE TABLE IF NOT EXISTS outbound_messages (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  from_addr TEXT NOT NULL,
+  to_json TEXT NOT NULL,
+  cc_json TEXT NOT NULL,
+  bcc_json TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  html TEXT,
+  text TEXT,
+  message_id TEXT,
+  status TEXT NOT NULL CHECK (status IN ('pending', 'sent', 'failed', 'bounced')),
+  error TEXT,
+  delivered_at TEXT,
+  created_at TEXT NOT NULL,
+  deleted_at TEXT
+);
+CREATE INDEX IF NOT EXISTS outbound_messages_tenant ON outbound_messages(tenant_id, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS outbound_messages_status ON outbound_messages(status);
+
+CREATE TABLE IF NOT EXISTS outbound_deliveries (
+  id TEXT PRIMARY KEY,
+  message_id TEXT NOT NULL REFERENCES outbound_messages(id) ON DELETE CASCADE,
+  resend_message_id TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('pending', 'in_flight', 'delivered', 'bounced', 'dead')),
+  response_json TEXT,
+  last_error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS outbound_deliveries_due ON outbound_deliveries(status, next_attempt_at);
+
+CREATE TABLE IF NOT EXISTS tenant_smtp_configs (
+  tenant_id TEXT PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL DEFAULT 'resend',
+  api_key_ref TEXT,
+  daily_limit INTEGER NOT NULL,
+  daily_used INTEGER NOT NULL DEFAULT 0,
+  day_started TEXT,
+  hourly_limit INTEGER NOT NULL,
+  hourly_used INTEGER NOT NULL DEFAULT 0,
+  hour_started TEXT,
+  updated_at TEXT NOT NULL
+);
+`;
+
 export function migrate(db: Database.Database): void {
   db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
     version INTEGER PRIMARY KEY,
@@ -142,4 +191,10 @@ export function migrate(db: Database.Database): void {
       apply(migration);
     }
   }
+
+  // Outbound tables are created outside the versioned loop so databases that
+  // were already running before the feature shipped keep working. SQLite
+  // cannot add tables with new foreign keys to existing parents without a
+  // rebuild, and every consumer of this schema runs migrate() at boot.
+  db.exec(OUTBOUND_SQL);
 }

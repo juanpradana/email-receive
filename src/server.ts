@@ -1,24 +1,41 @@
+import { resolve } from "node:path";
 import { openDb } from "./db/client.js";
 import { migrate } from "./db/migrate.js";
 import { buildApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { createLocalStorage } from "./services/storage.js";
+import { createMailProvider } from "./services/mail/index.js";
 import { processPending } from "./services/pipeline.js";
 import { deliverPending } from "./services/webhooks.js";
-import { purgeExpired } from "./jobs/retention.js";
+import { deliverOutboundPending } from "./services/outbound.js";
+import { purgeExpired, resetHourlyUsage } from "./jobs/retention.js";
 
 const PIPELINE_INTERVAL_MS = 5_000;
 const WEBHOOK_INTERVAL_MS = 2_000;
+const OUTBOUND_INTERVAL_MS = 10_000;
 const RETENTION_INTERVAL_MS = 60 * 60 * 1000;
 const PIPELINE_BATCH = 25;
 const WEBHOOK_BATCH = 25;
+const OUTBOUND_BATCH = 25;
 const RETENTION_BATCH = 100;
 
 const config = loadConfig();
 const db = openDb(config.dbPath);
 migrate(db);
 const storage = createLocalStorage(config.dataDir);
-const app = buildApp({ config, db, storage });
+const webDist = config.webDist ?? resolve(process.cwd(), "web/dist");
+
+let mailProvider: import("./services/mail/provider.js").MailProvider | null = null;
+if (config.resendApiKey) {
+  try {
+    mailProvider = createMailProvider(config);
+  } catch (error) {
+    process.env.LOG_LEVEL === "debug" && console.error(error);
+    mailProvider = null;
+  }
+}
+
+const app = buildApp({ config, db, storage, mailProvider, webDist });
 
 try {
   await app.listen({ port: config.port, host: config.host });
@@ -30,12 +47,15 @@ try {
 
 let pipelineRunning = true;
 let webhookRunning = true;
+let outboundRunning = true;
 let retentionRunning = true;
 let pipelineTimer: NodeJS.Timeout | undefined;
 let webhookTimer: NodeJS.Timeout | undefined;
+let outboundTimer: NodeJS.Timeout | undefined;
 let retentionTimer: NodeJS.Timeout | undefined;
 let pipelineInFlight: Promise<void> | undefined;
 let webhookInFlight: Promise<void> | undefined;
+let outboundInFlight: Promise<void> | undefined;
 let retentionInFlight: Promise<void> | undefined;
 
 async function runPipeline(): Promise<void> {
@@ -71,7 +91,30 @@ async function runWebhooks(): Promise<void> {
   }
 }
 
+async function runOutbound(): Promise<void> {
+  while (outboundRunning && mailProvider) {
+    try {
+      const delivered = await deliverOutboundPending(db, mailProvider, OUTBOUND_BATCH, new Date());
+      if (delivered < OUTBOUND_BATCH) break;
+    } catch (error) {
+      app.log.error(error, "Outbound delivery iteration failed");
+      break;
+    }
+  }
+  if (outboundRunning) {
+    outboundTimer = setTimeout(() => void runOutbound(), OUTBOUND_INTERVAL_MS);
+    outboundTimer.unref();
+  }
+}
+
 async function runRetention(): Promise<void> {
+  if (retentionRunning) {
+    try {
+      resetHourlyUsage(db, new Date());
+    } catch (error) {
+      app.log.error(error, "Outbound hourly usage reset failed");
+    }
+  }
   if (retentionRunning && config.retentionDays > 0) {
     try {
       const removed = await purgeExpired(db, storage, config.retentionDays, new Date());
@@ -89,6 +132,7 @@ async function runRetention(): Promise<void> {
 if (process.env.NODE_ENV !== "test") {
   pipelineInFlight = runPipeline();
   webhookInFlight = runWebhooks();
+  outboundInFlight = runOutbound();
   retentionInFlight = runRetention();
 }
 
@@ -100,15 +144,17 @@ const shutdown = async () => {
 
   pipelineRunning = false;
   webhookRunning = false;
+  outboundRunning = false;
   retentionRunning = false;
   if (pipelineTimer) clearTimeout(pipelineTimer);
   if (webhookTimer) clearTimeout(webhookTimer);
+  if (outboundTimer) clearTimeout(outboundTimer);
   if (retentionTimer) clearTimeout(retentionTimer);
 
   // Stop accepting new requests first, then let the background loops drain
   // their current iteration before closing the database they are using.
   await app.close();
-  await Promise.allSettled([pipelineInFlight, webhookInFlight, retentionInFlight]);
+  await Promise.allSettled([pipelineInFlight, webhookInFlight, outboundInFlight, retentionInFlight]);
   db.close();
 };
 

@@ -194,3 +194,60 @@ npm run typecheck
 npm test                 # suite API
 cd worker && npm test    # suite Email Worker
 ```
+
+---
+
+## Personal email (inbound + outbound) — `@farzani.my.id`
+
+### Overview
+
+This API supports **full personal email** on a custom domain without upgrading Cloudflare:
+
+| Direction | How it works |
+|-----------|--------------|
+| **Inbound** | Cloudflare Email Routing rule `to = me@farzani.my.id` → Worker `email-receive-forwarder` → `POST /v1/ingest`. Catch-all Gmail is untouched. |
+| **Outbound** | `POST /v1/outbound` → `MailProvider` abstraction → **Resend free tier** (3 000/mo, 100/day). Domain verified via `send.farzani.my.id` subdomain. |
+| **Webmail** | React + Vite SPA in `web/`, built to `web/dist`, served by the API at `/`. Auth via tenant API key in localStorage. |
+
+### Setup (manual, one-time)
+
+1. **Resend dashboard** → add `farzani.my.id` → copy the SPF/DKIM/DMARC records.
+2. **Cloudflare DNS** → add those records for subdomain `send.farzani.my.id` (do not proxy).
+3. **Resend** → create API key → put as `RESEND_API_KEY` in `.env`.
+4. **API tenant** → `POST /v1/admin/tenants` → `POST /v1/admin/tenants/:id/domains {domain:"farzani.my.id"}` → `POST /v1/admin/tenants/:id/keys {scopes:["read","admin"]}`.
+5. **Cloudflare Email Routing** → rule:
+   ```
+   wrangler email routing rules create farzani.my.id \
+     --match-type literal --match-field to \
+     --match-value "me@farzani.my.id" \
+     --action-type worker --action-value "email-receive-forwarder" \
+     --priority 1 --name "personal inbox: me@farzani.my.id"
+   ```
+   Priority `1` places it before the existing catch-all.
+6. **Test send** (curl or webmail Compose):
+   ```
+   curl -X POST $BASE/v1/outbound -H "Authorization: Bearer $KEY" \
+     -d '{"fromAddr":"me@farzani.my.id","to":["someone@gmail.com"],"subject":"uji","text":"halo"}'
+   ```
+   Expect `202 {accepted:true}`. The provider rejects unverified domains immediately; status=`failed`, error surfaced in list/detail.
+7. **Receive** → email to `me@farzani.my.id` appears in `GET /v1/messages` and in the webmail Inbox.
+
+### Rate limit
+
+Default `OUTBOUND_RATE_LIMIT_PER_HOUR=10` per tenant. Configurable via `.env`. Exceeding returns `429 {error:"outbound_rate_limited"}`. Counters reset at UTC hour boundaries.
+
+### Webmail
+
+```bash
+cd web
+npm install
+npm run build   # produces web/dist
+```
+Start the API; the SPA is served at `/`. Open in a browser, enter base URL + API key + default From address, then Compose / Inbox / Read / Reply.
+
+### Architecture notes
+
+- `RESEND_API_KEY` is a server-side env var — **never reaches the frontend**.
+- Inbound HTML is stored for download only; the webmail renders `body_text` (anti-XSS).
+- Outbound replies use `POST /v1/messages/:id/reply`; the API builds `In-Reply-To`, `References`, `Reply-To` from the original message's headers.
+- The `MailProvider` interface (`src/services/mail/provider.ts`) lets you swap Resend for Brevo/SMTP2Go/Cloudflare Paid without changing routes.
