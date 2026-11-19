@@ -66,7 +66,11 @@ export function AdminLogin() {
         <button
           type="submit"
           disabled={loading || !baseUrl.trim() || !email.trim() || !password}
-          style={styles.primary}
+          style={{
+            ...styles.primary,
+            opacity: loading || !baseUrl.trim() || !email.trim() || !password ? 0.6 : 1,
+            pointerEvents: loading || !baseUrl.trim() || !email.trim() || !password ? "none" : "auto",
+          }}
         >
           {loading ? "Signing in…" : "Sign in"}
         </button>
@@ -140,8 +144,6 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "pointer",
     fontSize: "0.95rem",
     fontWeight: 500,
-    opacity: 0.6,
-    pointerEvents: "none",
   },
   secondary: {
     padding: "0.45rem 0.9rem",
