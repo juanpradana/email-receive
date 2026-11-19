@@ -1,11 +1,14 @@
 import { useEffect, useState, createContext, useContext, ReactNode } from "react";
 import { loadMailbox, saveMailbox, clearMailbox, type Mailbox } from "./lib/mailbox.js";
+import { loadAdminSession, clearAdminSession, type AdminSession } from "./lib/adminApi.js";
 import { Inbox } from "./pages/Inbox.js";
 import { Read } from "./pages/Read.js";
 import { Compose } from "./pages/Compose.js";
 import { Settings } from "./pages/Settings.js";
+import { AdminLogin } from "./pages/admin/Login.js";
+import { AdminDashboard } from "./pages/admin/Dashboard.js";
 
-type Page = "inbox" | "read" | "compose" | "settings";
+type Page = "inbox" | "read" | "compose" | "settings" | "admin" | "adminLogin";
 
 interface AppContextValue {
   mailbox: Mailbox | null;
@@ -14,6 +17,8 @@ interface AppContextValue {
   setPage: (p: Page) => void;
   messageId: string | null;
   setMessageId: (id: string | null) => void;
+  adminSession: AdminSession | null;
+  setAdminSession: (s: AdminSession | null) => void;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -27,6 +32,7 @@ function AppProvider({ children }: { children: ReactNode }) {
   const [mailbox, setMailboxState] = useState<Mailbox | null>(null);
   const [page, setPage] = useState<Page>("inbox");
   const [messageId, setMessageId] = useState<string | null>(null);
+  const [adminSession, setAdminSession] = useState<AdminSession | null>(null);
 
   function setMailbox(m: Mailbox | null) {
     setMailboxState(m);
@@ -35,19 +41,47 @@ function AppProvider({ children }: { children: ReactNode }) {
     setPage(m ? "inbox" : "settings");
   }
 
+  function setAdminSessionAndPage(s: AdminSession | null) {
+    setAdminSession(s);
+    if (s) {
+      setPage("admin");
+    } else {
+      setPage("inbox");
+    }
+  }
+
   useEffect(() => {
     setMailboxState(loadMailbox());
   }, []);
 
+  useEffect(() => {
+    setAdminSession(loadAdminSession());
+  }, []);
+
   return (
-    <AppContext.Provider value={{ mailbox, setMailbox, page, setPage, messageId, setMessageId }}>
+    <AppContext.Provider
+      value={{
+        mailbox,
+        setMailbox,
+        page,
+        setPage,
+        messageId,
+        setMessageId,
+        adminSession,
+        setAdminSession: setAdminSessionAndPage,
+      }}
+    >
       {children}
     </AppContext.Provider>
   );
 }
 
+function isAdminPath(): boolean {
+  return window.location.pathname.replace(/\/+$/, "") === "/admin";
+}
+
 function Layout({ children }: { children: ReactNode }) {
-  const { mailbox, setPage } = useApp();
+  const { mailbox, setPage, adminSession, setAdminSession } = useApp();
   if (!mailbox) return <Settings onSubmit={() => setPage("inbox")} />;
 
   return (
@@ -58,6 +92,15 @@ function Layout({ children }: { children: ReactNode }) {
           <button onClick={() => setPage("inbox")} style={styles.navLink}>Inbox</button>
           <button onClick={() => setPage("compose")} style={styles.navLink}>Compose</button>
           <button onClick={() => setPage("settings")} style={styles.navLink}>Settings</button>
+          <a
+            href="/admin"
+            style={{ ...styles.navLink, textDecoration: "none", display: "inline-block" }}
+            onClick={() => {
+              if (!adminSession) setAdminSession(null);
+            }}
+          >
+            Admin
+          </a>
         </nav>
       </header>
       <main style={styles.main}>{children}</main>
@@ -79,12 +122,21 @@ function Router() {
   }
 }
 
+function AdminRouter() {
+  const { adminSession } = useApp();
+  if (!adminSession) return <AdminLogin />;
+  return <AdminDashboard />;
+}
+
 export default function App() {
+  const admin = isAdminPath();
   return (
     <AppProvider>
-      <Layout>
-        <Router />
-      </Layout>
+      {admin ? <AdminRouter /> : (
+        <Layout>
+          <Router />
+        </Layout>
+      )}
     </AppProvider>
   );
 }
