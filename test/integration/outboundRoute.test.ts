@@ -255,8 +255,10 @@ describe("POST /v1/outbound", () => {
     provider = previous;
   });
 
-  it("records a provider rejection as a failed message without retrying", async () => {
-    provider = { send: async () => ({ accepted: false, error: "invalid_from: domain not verified" }) };
+  it("records a terminal provider rejection as a failed message without retrying", async () => {
+    provider = {
+      send: async () => ({ accepted: false, error: "invalid_from: domain not verified", terminal: true }),
+    };
     app = makeApp();
     const tenant = createTenant("Acme", "acme.test");
 
@@ -277,5 +279,8 @@ describe("POST /v1/outbound", () => {
     };
     expect(row.status).toBe("failed");
     expect(row.error).toMatch(/invalid_from/);
+    // The delivery should be marked dead (no retry)
+    const delivery = db.prepare("SELECT status FROM outbound_deliveries").get() as { status: string };
+    expect(delivery.status).toBe("dead");
   });
 });

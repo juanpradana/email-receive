@@ -87,8 +87,8 @@ describe("message retention", () => {
 describe("outbound hourly usage reset", () => {
   it("clears last hour's counter and leaves the current hour alone", () => {
     const configs = createTenantSmtpConfigsRepo(db);
-    configs.consume(tenantId, { hourlyLimit: 5, now: "2026-11-18T10:05:00.000Z" });
-    configs.consume(tenantId, { hourlyLimit: 5, now: "2026-11-18T10:06:00.000Z" });
+    configs.consume(tenantId, { hourlyLimit: 5, dailyLimit: 100, now: "2026-11-18T10:05:00.000Z" });
+    configs.consume(tenantId, { hourlyLimit: 5, dailyLimit: 100, now: "2026-11-18T10:06:00.000Z" });
     expect(configs.find(tenantId)!.hourly_used).toBe(2);
 
     resetHourlyUsage(db, new Date("2026-11-18T10:30:00.000Z"));

@@ -2,7 +2,7 @@ import type Database from "better-sqlite3";
 import { newId } from "../client.js";
 
 export type OutboundStatus = "pending" | "sent" | "failed" | "bounced";
-export type OutboundDeliveryStatus = "pending" | "delivered" | "bounced" | "dead";
+export type OutboundDeliveryStatus = "pending" | "in_flight" | "delivered" | "bounced" | "dead";
 
 export interface OutboundRow {
   id: string;
@@ -45,6 +45,8 @@ export interface OutboundDeliveriesRepo {
     nextAttemptAt?: string;
     status?: "pending" | "bounced";
   }): { id: string };
+  /** Atomically claims a delivery so concurrent callers cannot double-send. */
+  claimForAttempt(id: string, nowIso?: string): boolean;
   findDue(nowIso: string, limit: number): Array<
     {
       id: string;
@@ -178,6 +180,25 @@ export function createOutboundDeliveriesRepo(db: Database.Database): OutboundDel
       return { id };
     },
 
+    /**
+     * Atomically claims a pending delivery for processing by updating its
+     * status to a special 'in_flight' state. Returns true if the claim
+     * succeeded (row was pending and due), false otherwise. This prevents
+     * the background dispatcher from picking up a delivery that the
+     * synchronous route is already attempting.
+     */
+    claimForAttempt(id: string, nowIsoValue?: string): boolean {
+      const now = nowIso(nowIsoValue);
+      const result = db
+        .prepare(
+          `UPDATE outbound_deliveries
+           SET status = 'in_flight', updated_at = ?
+           WHERE id = ? AND status = 'pending' AND next_attempt_at <= ?`,
+        )
+        .run(now, id, now);
+      return result.changes > 0;
+    },
+
     findDue(nowIsoValue, limit) {
       return db
         .prepare(
@@ -230,7 +251,7 @@ export function createOutboundDeliveriesRepo(db: Database.Database): OutboundDel
     markAttempt(id, attempts, error, nextAttemptAtIso, at) {
       db.prepare(
         `UPDATE outbound_deliveries
-         SET attempts = ?, last_error = ?, next_attempt_at = ?, updated_at = ?
+         SET attempts = ?, last_error = ?, next_attempt_at = ?, status = 'pending', updated_at = ?
          WHERE id = ?`,
       ).run(attempts, error.slice(0, 1000), nextAttemptAtIso, nowIso(at), id);
     },

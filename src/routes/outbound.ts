@@ -9,12 +9,86 @@ import { createTenantsRepo } from "../db/repo/tenants.js";
 const MAX_RECIPIENTS = 50;
 const MAX_SUBJECT = 998;
 
+/**
+ * Matches a syntactically valid RFC 5321 address. Rejects `mailto:` and
+ * similar schemes, and rejects bare private/loopback IP literals so the
+ * tenant cannot send to an internal host or the metadata server.
+ *
+ * The bracket form `[x]` around an IPv6 literal is accepted; the IPv6
+ * address itself is checked by `isPrivateIp` below.
+ */
 const address = z
   .string()
   .trim()
   .min(3)
   .max(320)
-  .regex(/^[^\s@,<>]+@[^\s@,<>]+\.[^\s@,<>]+$/, "invalid email address");
+  .refine((value) => {
+    // Reject the mailto: scheme explicitly
+    if (value.toLowerCase().startsWith("mailto:")) return false;
+    // Extract the host part (after @, before any bracket-close or trailing junk)
+    const at = value.lastIndexOf("@");
+    if (at <= 0) return false;
+    const host = value.slice(at + 1).trim();
+    if (!host || host.length > 255) return false;
+
+    // If the host is an IPv6 literal in brackets, check for private ranges
+    const v6Match = host.match(/^\[([^\]]+)\]$/);
+    if (v6Match) {
+      return !isPrivateIpv6(v6Match[1] ?? host);
+    }
+
+    // If the host is a bare IPv4 literal, check for private ranges
+    const v4Match = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    if (v4Match) {
+      return !isPrivateIpv4(v4Match);
+    }
+
+    // Default: domain name must have at least one dot and no obvious
+    // private/loopback hostnames
+    if (!host.includes(".")) {
+      // Reject bare loopback and metadata hostnames
+      const lower = host.toLowerCase();
+      if (lower === "localhost" || lower === "metadata" || lower === "0.0.0.0") return false;
+    }
+    return true;
+  }, "invalid email address or recipient host");
+
+function isPrivateIpv4(match: RegExpMatchArray): boolean {
+  // match[1..4] are the four octets
+  const o1 = Number(match[1] ?? NaN);
+  const o2 = Number(match[2] ?? NaN);
+  // 0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10 (CGNAT), 127.0.0.0/8, 169.254.0.0/16,
+  // 172.16.0.0/12, 192.168.0.0/16
+  if (Number.isNaN(o1) || Number.isNaN(o2)) return true;
+  if (o1 === 0 || o1 === 10 || o1 === 127) return true;
+  if (o1 === 100 && o2 >= 64 && o2 <= 127) return true; // CGNAT
+  if (o1 === 169 && o2 === 254) return true; // link-local
+  if (o1 === 172 && o2 >= 16 && o2 <= 31) return true;
+  if (o1 === 192 && o2 === 168) return true;
+  if (o1 === 255) return true;
+  return false;
+}
+
+function isPrivateIpv6(literal: string): boolean {
+  const lower = literal.toLowerCase();
+  // ::1 loopback
+  if (lower === "::1") return true;
+  // ::/128 (unspecified)
+  if (lower === "::") return true;
+  // fe80::/10 link-local
+  if (lower.startsWith("fe80:")) return true;
+  // fc00::/7 (Unique Local Addresses, the IPv6 equivalent of 10/8 + 172.16/12)
+  if (lower.startsWith("fc") || lower.startsWith("fd")) return true;
+  // 2001:db8::/32 documentation range
+  if (lower.startsWith("2001:db8:")) return true;
+  // IPv4-mapped IPv6 addresses (::ffff:x.x.x.x) — check the embedded IPv4
+  const v4Mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (v4Mapped?.[1]) {
+    const octets = v4Mapped[1].split(".").map((s) => Number(s));
+    return isPrivateIpv4(["", ...octets] as unknown as RegExpMatchArray);
+  }
+  return false;
+}
 
 const sendBody = z
   .object({
@@ -118,6 +192,7 @@ export const outboundRoutes: FastifyPluginAsync = async (app) => {
     const now = new Date().toISOString();
     const allowed = smtpConfigs().consume(tenantId, {
       hourlyLimit: app.deps.config.outboundRateLimitPerHour,
+      dailyLimit: app.deps.config.outboundRateLimitPerDay,
       now,
     });
     if (!allowed) {
@@ -159,29 +234,44 @@ export const outboundRoutes: FastifyPluginAsync = async (app) => {
       });
     }
 
-    // A provider rejection is terminal for this attempt — the address or the
-    // domain will not start working on a retry. Keep the row and the error so
-    // the webmail can surface it instead of silently dropping the message.
+    // A provider rejection is terminal for this attempt. Transient failures
+    // (5xx, 429, timeouts) leave the delivery pending with a backoff so the
+    // background dispatcher can retry. Terminal failures (4xx, unverified
+    // domain, invalid recipient) mark the delivery dead immediately.
+    const isTransient = !result.terminal;
     outbound().markFailed(row.id, result.error ?? "send_failed");
-    deliveries().markDead(delivery.id, 1, result.error ?? "send_failed");
+    if (isTransient) {
+      // Mark attempt with backoff — dispatcher will pick this up later
+      const nextAt = new Date(Date.now() + 30_000).toISOString();
+      deliveries().markAttempt(delivery.id, 1, result.error ?? "send_failed", nextAt, new Date().toISOString());
+    } else {
+      // Terminal error — no retry
+      deliveries().markDead(delivery.id, 1, result.error ?? "send_failed");
+    }
     return reply.code(202).send({
       outboundId: row.id,
       resendMessageId: null,
       accepted: false,
       error: result.error ?? "send_failed",
+      transient: isTransient,
     });
   };
 
-  const replyBody = z.object({
-    to: z.array(address).max(MAX_RECIPIENTS).optional(),
-    cc: z.array(address).max(MAX_RECIPIENTS).optional(),
-    bcc: z.array(address).max(MAX_RECIPIENTS).optional(),
-    fromAddr: address.optional(),
-    subject: z.string().max(MAX_SUBJECT).optional(),
-    html: z.string().max(1_000_000).optional(),
-    text: z.string().max(1_000_000).optional(),
-    headers: z.record(z.string(), z.string()).optional(),
-  });
+  const replyBody = z
+    .object({
+      to: z.array(address).max(MAX_RECIPIENTS).optional(),
+      cc: z.array(address).max(MAX_RECIPIENTS).optional(),
+      bcc: z.array(address).max(MAX_RECIPIENTS).optional(),
+      fromAddr: address.optional(),
+      subject: z.string().max(MAX_SUBJECT).optional(),
+      html: z.string().max(1_000_000).optional(),
+      text: z.string().max(1_000_000).optional(),
+      headers: z.record(z.string(), z.string()).optional(),
+    })
+    .refine(
+      (value) => (value.to?.length ?? 0) + (value.cc?.length ?? 0) + (value.bcc?.length ?? 0) <= MAX_RECIPIENTS,
+      { message: `no more than ${MAX_RECIPIENTS} recipients in total`, path: ["to"] },
+    );
 
   app.post("/v1/messages/:id/reply", { preHandler: guard.requireAdmin }, async (request, reply) => {
     const { id } = z.object({ id: z.string() }).parse(request.params);

@@ -162,10 +162,10 @@ describe("tenant smtp configs repository", () => {
   it("creates a default config on first use and keeps it", () => {
     const tenantId = newTenant();
     const configs = createTenantSmtpConfigsRepo(db);
-    const first = configs.ensure(tenantId, { hourlyLimit: 10, now: "2026-11-18T10:00:00.000Z" });
-    const second = configs.ensure(tenantId, { hourlyLimit: 99, now: "2026-11-18T10:30:00.000Z" });
+    const first = configs.ensure(tenantId, { hourlyLimit: 10, dailyLimit: 100, now: "2026-11-18T10:00:00.000Z" });
+    const second = configs.ensure(tenantId, { hourlyLimit: 99, dailyLimit: 999, now: "2026-11-18T10:30:00.000Z" });
 
-    expect(first).toMatchObject({ provider: "resend", hourly_limit: 10, hourly_used: 0 });
+    expect(first).toMatchObject({ provider: "resend", hourly_limit: 10, hourly_used: 0, daily_limit: 100 });
     expect(second.tenant_id).toBe(first.tenant_id);
     expect(second.hourly_limit).toBe(10);
   });
@@ -174,13 +174,29 @@ describe("tenant smtp configs repository", () => {
     const tenantId = newTenant();
     const configs = createTenantSmtpConfigsRepo(db);
 
-    expect(configs.consume(tenantId, { hourlyLimit: 2, now: "2026-11-18T10:05:00.000Z" })).toBe(true);
-    expect(configs.consume(tenantId, { hourlyLimit: 2, now: "2026-11-18T10:06:00.000Z" })).toBe(true);
-    expect(configs.consume(tenantId, { hourlyLimit: 2, now: "2026-11-18T10:07:00.000Z" })).toBe(false);
+    expect(configs.consume(tenantId, { hourlyLimit: 2, dailyLimit: 10, now: "2026-11-18T10:05:00.000Z" })).toBe(true);
+    expect(configs.consume(tenantId, { hourlyLimit: 2, dailyLimit: 10, now: "2026-11-18T10:06:00.000Z" })).toBe(true);
+    expect(configs.consume(tenantId, { hourlyLimit: 2, dailyLimit: 10, now: "2026-11-18T10:07:00.000Z" })).toBe(false);
     expect(configs.find(tenantId)!.hourly_used).toBe(2);
 
-    expect(configs.consume(tenantId, { hourlyLimit: 2, now: "2026-11-18T11:00:01.000Z" })).toBe(true);
+    expect(configs.consume(tenantId, { hourlyLimit: 2, dailyLimit: 10, now: "2026-11-18T11:00:01.000Z" })).toBe(true);
     expect(configs.find(tenantId)!.hourly_used).toBe(1);
+  });
+
+  it("counts usage inside the day and resets in a new day", () => {
+    const tenantId = newTenant();
+    const configs = createTenantSmtpConfigsRepo(db);
+
+    for (let i = 0; i < 3; i += 1) {
+      expect(configs.consume(tenantId, { hourlyLimit: 10, dailyLimit: 3, now: `2026-11-18T${String(10 + i).padStart(2, "0")}:00:00.000Z` })).toBe(true);
+    }
+    // 4th consume on the same day should fail even though the hour resets
+    expect(configs.consume(tenantId, { hourlyLimit: 10, dailyLimit: 3, now: "2026-11-18T13:00:00.000Z" })).toBe(false);
+    expect(configs.find(tenantId)!.daily_used).toBe(3);
+
+    // Next UTC day: counter resets
+    expect(configs.consume(tenantId, { hourlyLimit: 10, dailyLimit: 3, now: "2026-11-19T00:00:01.000Z" })).toBe(true);
+    expect(configs.find(tenantId)!.daily_used).toBe(1);
   });
 
   it("keeps counters isolated per tenant", () => {
@@ -189,9 +205,9 @@ describe("tenant smtp configs repository", () => {
     const configs = createTenantSmtpConfigsRepo(db);
 
     for (let i = 0; i < 2; i += 1) {
-      expect(configs.consume(a, { hourlyLimit: 2, now: "2026-11-18T10:05:00.000Z" })).toBe(true);
+      expect(configs.consume(a, { hourlyLimit: 2, dailyLimit: 10, now: "2026-11-18T10:05:00.000Z" })).toBe(true);
     }
-    expect(configs.consume(a, { hourlyLimit: 2, now: "2026-11-18T10:06:00.000Z" })).toBe(false);
-    expect(configs.consume(b, { hourlyLimit: 2, now: "2026-11-18T10:06:00.000Z" })).toBe(true);
+    expect(configs.consume(a, { hourlyLimit: 2, dailyLimit: 10, now: "2026-11-18T10:06:00.000Z" })).toBe(false);
+    expect(configs.consume(b, { hourlyLimit: 2, dailyLimit: 10, now: "2026-11-18T10:06:00.000Z" })).toBe(true);
   });
 });

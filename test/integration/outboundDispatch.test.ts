@@ -5,12 +5,12 @@ import { createOutboundDeliveriesRepo, createOutboundRepo } from "../../src/db/r
 import { createTenantsRepo } from "../../src/db/repo/tenants.js";
 import { openDb } from "../../src/db/client.js";
 import { migrate } from "../../src/db/migrate.js";
-import type { MailProvider } from "../../src/services/mail/provider.js";
+import type { MailProvider, MailProviderResult } from "../../src/services/mail/provider.js";
 
 let db: Database.Database;
 let tenantId: string;
 let provider: MailProvider;
-let results: Array<{ accepted: boolean; resendMessageId?: string; error?: string }>;
+let results: MailProviderResult[];
 
 function makeProvider() {
   return {
@@ -67,20 +67,74 @@ describe("outbound dispatcher", () => {
     });
     deliveries.create({ messageId: row.id, nextAttemptAt: new Date().toISOString() });
 
-    for (let i = 0; i < 5; i += 1) {
+    // 5 transient failures — dispatcher must NOT mark dead until attempt 5
+    // (terminal OR MAX_ATTEMPTS).
+    for (let i = 0; i < 4; i += 1) {
       results.push({ accepted: false, error: "503 service unavailable" });
     }
-    // Advance the clock past each backoff window so every attempt is due.
+    results.push({ accepted: false, error: "503 service unavailable" }); // 5th = at MAX
+
+    // Drive a synthetic clock forward past each backoff window.
+    // After attempt 1: next is ~10s+; after 2: ~60s; after 3: ~5m; after 4: ~30m.
     let clock = Date.now();
-    for (let i = 0; i < 5; i += 1) {
+    for (let i = 0; i < 4; i += 1) {
       await deliverOutboundPending(db, provider, 10, new Date(clock));
-      clock += 5 * 60 * 60 * 1000;
+      clock += 5 * 60 * 60 * 1000; // 5h covers every remaining backoff
     }
+    // Now delivery is in_flight (attempted 4 times, not dead).
+    // 5th attempt: MAX_ATTEMPTS → dead.
+    await deliverOutboundPending(db, provider, 10, new Date(clock));
+    clock += 5 * 60 * 60 * 1000;
 
     const delivery = deliveries.findByMessage(row.id)!;
     expect(delivery.status).toBe("dead");
     expect(delivery.attempts).toBe(5);
     expect(delivery.last_error).toContain("503");
+  });
+
+  it("marks a delivery dead immediately when the provider signals a terminal error", async () => {
+    const outbound = createOutboundRepo(db);
+    const deliveries = createOutboundDeliveriesRepo(db);
+    const row = outbound.insert({
+      tenantId,
+      fromAddr: "me@acme.test",
+      to: ["a@b.test"],
+      subject: "hi",
+      text: "body",
+    });
+    deliveries.create({ messageId: row.id, nextAttemptAt: new Date().toISOString() });
+
+    results.push({ accepted: false, error: "invalid_domain", terminal: true });
+    await deliverOutboundPending(db, provider, 10, new Date());
+
+    const delivery = deliveries.findByMessage(row.id)!;
+    expect(delivery.status).toBe("dead");
+    expect(delivery.attempts).toBe(1);
+    expect(delivery.last_error).toBe("invalid_domain");
+  });
+
+  it("uses the 10-second backoff slot for the first failed attempt", async () => {
+    const outbound = createOutboundRepo(db);
+    const deliveries = createOutboundDeliveriesRepo(db);
+    const row = outbound.insert({
+      tenantId,
+      fromAddr: "me@acme.test",
+      to: ["a@b.test"],
+      subject: "hi",
+      text: "body",
+    });
+    const start = new Date();
+    deliveries.create({ messageId: row.id, nextAttemptAt: start.toISOString() });
+
+    results.push({ accepted: false, error: "503" });
+    await deliverOutboundPending(db, provider, 10, start);
+
+    const delivery = deliveries.findByMessage(row.id)!;
+    const nextTime = new Date(delivery.next_attempt_at).getTime();
+    // Next attempt should be 10s + jitter (up to 1s) after the start
+    const deltaMs = nextTime - start.getTime();
+    expect(deltaMs).toBeGreaterThanOrEqual(10_000);
+    expect(deltaMs).toBeLessThanOrEqual(11_000);
   });
 
   it("does not delete the outbound message when the provider fails", async () => {

@@ -60,7 +60,7 @@ describe("resend provider", () => {
 
     const result = await createResendProvider("k").send({ fromAddr: "a@b.test", to: ["c@d.test"], subject: "s" });
 
-    expect(result).toEqual({ accepted: false, error: "timeout" });
+    expect(result).toEqual({ accepted: false, error: "timeout", terminal: false });
   });
 
   it("reports a network error as a failed send", async () => {

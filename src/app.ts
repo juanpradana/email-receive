@@ -48,7 +48,14 @@ export function buildApp(deps: AppDependencies): FastifyInstance {
   const app = Fastify({
     logger: {
       level: process.env.LOG_LEVEL ?? "info",
-      redact: ["req.headers.authorization", "req.headers.x-ingest-signature"],
+      redact: [
+        "req.headers.authorization",
+        "req.headers.x-ingest-signature",
+        "err.config.headers.Authorization",
+        "err.config.headers.authorization",
+        "err.request.headers.Authorization",
+        "err.request.headers.authorization",
+      ],
     },
     bodyLimit: deps.config.maxMessageBytes,
   });

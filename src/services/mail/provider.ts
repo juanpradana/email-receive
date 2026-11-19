@@ -13,6 +13,12 @@ export interface MailProviderResult {
   resendMessageId?: string;
   accepted: boolean;
   error?: string;
+  /**
+   * True when the provider signalled a terminal, non-retryable failure
+   * (invalid address, unverified domain, 4xx). Transient failures
+   * (5xx, 429, timeouts) leave this undefined/false so callers can retry.
+   */
+  terminal?: boolean;
 }
 
 export interface MailProvider {

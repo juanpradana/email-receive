@@ -39,12 +39,22 @@ export function createResendProvider(apiKey: string): MailProvider {
         }
 
         const errorBody = (await response.json().catch(() => ({}))) as { message?: string; name?: string };
-        return { accepted: false, error: errorBody.message ?? errorBody.name ?? `HTTP ${response.status}` };
+        const statusText = `HTTP ${response.status}`;
+        const errorMessage = errorBody.message ?? errorBody.name ?? statusText;
+        // 4xx (except 429) and 4xx-like terminal errors are not retryable.
+        // 5xx, 429, and timeouts are transient.
+        const isTransient = response.status === 429 || response.status >= 500;
+        return {
+          accepted: false,
+          error: `${statusText}: ${errorMessage}`,
+          terminal: !isTransient,
+        };
       } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") {
-          return { accepted: false, error: "timeout" };
+          return { accepted: false, error: "timeout", terminal: false };
         }
-        return { accepted: false, error: error instanceof Error ? error.message : String(error) };
+        // Network errors and timeouts are transient
+        return { accepted: false, error: error instanceof Error ? error.message : String(error), terminal: false };
       } finally {
         clearTimeout(timeout);
       }
