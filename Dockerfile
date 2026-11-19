@@ -6,11 +6,22 @@ RUN apt-get update \
 COPY package.json package-lock.json ./
 RUN npm ci
 
+FROM deps AS web-deps
+WORKDIR /app/web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+
 FROM deps AS build
 COPY tsconfig.json tsconfig.build.json ./
 COPY src ./src
 RUN npm run build \
   && npm prune --omit=dev
+
+FROM web-deps AS web-build
+COPY web/tsconfig.json web/vite.config.ts ./
+COPY web/src ./src
+COPY web/index.html ./
+RUN npm run build
 
 FROM node:22-bookworm-slim AS runtime
 ENV NODE_ENV=production \
@@ -24,6 +35,7 @@ RUN groupadd --gid 10001 app \
   && chown -R app:app /data
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
+COPY --from=web-build /app/web/dist ./web/dist
 COPY package.json ./
 RUN chown -R app:app /app
 USER app
