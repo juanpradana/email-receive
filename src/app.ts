@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import type Database from "better-sqlite3";
 import type { FastifyInstance } from "fastify";
 import Fastify from "fastify";
@@ -19,6 +21,27 @@ export interface AppDependencies {
   storage: Storage;
   /** Outbound mail provider. Null when RESEND_API_KEY is unset; routes then answer 503. */
   mailProvider?: MailProvider | null;
+  /** Directory the webmail SPA is built into; when present, it is served as static files. */
+  webDist?: string;
+}
+
+/** Serves the built webmail SPA from `webDist` if that directory exists. */
+async function serveStaticFiles(app: FastifyInstance, root: string, webDist?: string): Promise<void> {
+  if (!webDist || !existsSync(webDist)) return;
+
+  const { default: fastifyStatic } = await import("@fastify/static");
+  await app.register(fastifyStatic, {
+    root: webDist,
+    index: "index.html",
+  });
+  // Any GET that is not an API route or a real static asset falls through to
+  // index.html so the SPA router can take over.
+  app.setNotFoundHandler((request, reply) => {
+    if (request.method === "GET" && !request.url.startsWith("/v1")) {
+      return reply.sendFile("index.html");
+    }
+    return reply.code(404).send({ error: "not_found" });
+  });
 }
 
 export function buildApp(deps: AppDependencies): FastifyInstance {
@@ -54,6 +77,11 @@ export function buildApp(deps: AppDependencies): FastifyInstance {
   app.register(async (adminApp) => {
     adminApp.addHook("preHandler", requireAdminToken(deps.config.adminBootstrapToken));
     adminApp.register(adminRoutes);
+  });
+
+  // Static webmail is registered last so API routes are matched first.
+  app.register(async () => {
+    await serveStaticFiles(app, process.cwd(), deps.webDist ?? resolve(process.cwd(), "web/dist"));
   });
 
   return app;

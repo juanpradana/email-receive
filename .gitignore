@@ -7,4 +7,5 @@ data/
 .superpowers/
 coverage/
 worker/node_modules/
-worker/.wrangler/
+worker/.wrangler/web/node_modules/
+web/dist/

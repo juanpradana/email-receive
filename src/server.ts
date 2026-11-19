@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { openDb } from "./db/client.js";
 import { migrate } from "./db/migrate.js";
 import { buildApp } from "./app.js";
@@ -22,6 +23,7 @@ const config = loadConfig();
 const db = openDb(config.dbPath);
 migrate(db);
 const storage = createLocalStorage(config.dataDir);
+const webDist = config.webDist ?? resolve(process.cwd(), "web/dist");
 
 let mailProvider: import("./services/mail/provider.js").MailProvider | null = null;
 if (config.resendApiKey) {
@@ -33,7 +35,7 @@ if (config.resendApiKey) {
   }
 }
 
-const app = buildApp({ config, db, storage, mailProvider });
+const app = buildApp({ config, db, storage, mailProvider, webDist });
 
 try {
   await app.listen({ port: config.port, host: config.host });
