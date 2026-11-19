@@ -4,17 +4,21 @@ import Fastify from "fastify";
 import { ZodError } from "zod";
 import type { AppConfig } from "./config.js";
 import type { Storage } from "./services/storage.js";
+import type { MailProvider } from "./services/mail/provider.js";
 import { requireAdminToken } from "./auth/apiKey.js";
 import { healthRoutes } from "./routes/health.js";
 import { adminRoutes } from "./routes/admin.js";
 import { ingestRoutes } from "./routes/ingest.js";
 import { messageRoutes } from "./routes/messages.js";
+import { outboundRoutes } from "./routes/outbound.js";
 import { webhookRoutes } from "./routes/webhooks.js";
 
 export interface AppDependencies {
   config: AppConfig;
   db: Database.Database;
   storage: Storage;
+  /** Outbound mail provider. Null when RESEND_API_KEY is unset; routes then answer 503. */
+  mailProvider?: MailProvider | null;
 }
 
 export function buildApp(deps: AppDependencies): FastifyInstance {
@@ -44,6 +48,7 @@ export function buildApp(deps: AppDependencies): FastifyInstance {
   app.register(healthRoutes);
   app.register(ingestRoutes);
   app.register(messageRoutes);
+  app.register(outboundRoutes);
   app.register(webhookRoutes);
 
   app.register(async (adminApp) => {

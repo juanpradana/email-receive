@@ -3,6 +3,7 @@ import { migrate } from "./db/migrate.js";
 import { buildApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { createLocalStorage } from "./services/storage.js";
+import { createMailProvider } from "./services/mail/index.js";
 import { processPending } from "./services/pipeline.js";
 import { deliverPending } from "./services/webhooks.js";
 import { purgeExpired } from "./jobs/retention.js";
@@ -18,7 +19,18 @@ const config = loadConfig();
 const db = openDb(config.dbPath);
 migrate(db);
 const storage = createLocalStorage(config.dataDir);
-const app = buildApp({ config, db, storage });
+
+let mailProvider: import("./services/mail/provider.js").MailProvider | null = null;
+if (config.resendApiKey) {
+  try {
+    mailProvider = createMailProvider(config);
+  } catch (error) {
+    process.env.LOG_LEVEL === "debug" && console.error(error);
+    mailProvider = null;
+  }
+}
+
+const app = buildApp({ config, db, storage, mailProvider });
 
 try {
   await app.listen({ port: config.port, host: config.host });
