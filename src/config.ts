@@ -16,6 +16,8 @@ const envSchema = z.object({
   WEBHOOK_ALLOW_PRIVATE: z.stringbool().default(false),
   WEBHOOK_MAX_ATTEMPTS: z.coerce.number().int().positive().default(8),
   RETENTION_DAYS: z.coerce.number().int().nonnegative().default(0),
+  RESEND_API_KEY: z.string().optional(),
+  OUTBOUND_RATE_LIMIT_PER_HOUR: z.coerce.number().int().positive().default(10),
 });
 
 export interface AppConfig {
@@ -32,6 +34,8 @@ export interface AppConfig {
   webhookAllowPrivate: boolean;
   webhookMaxAttempts: number;
   retentionDays: number;
+  resendApiKey?: string;
+  outboundRateLimitPerHour: number;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -61,5 +65,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     webhookAllowPrivate: parsed.data.WEBHOOK_ALLOW_PRIVATE,
     webhookMaxAttempts: parsed.data.WEBHOOK_MAX_ATTEMPTS,
     retentionDays: parsed.data.RETENTION_DAYS,
+    resendApiKey: parsed.data.RESEND_API_KEY,
+    outboundRateLimitPerHour: parsed.data.OUTBOUND_RATE_LIMIT_PER_HOUR,
   };
 }
