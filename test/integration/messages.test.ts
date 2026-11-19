@@ -13,6 +13,7 @@ import { createTenantsRepo } from "../../src/db/repo/tenants.js";
 import { loadConfig } from "../../src/config.js";
 import { createLocalStorage } from "../../src/services/storage.js";
 import { processPending } from "../../src/services/pipeline.js";
+import { createAdminAuthGuard } from "../../src/auth/apiKey.js";
 
 let root: string;
 let db: Database.Database;
@@ -25,16 +26,19 @@ beforeEach(async () => {
   db = openDb(path.join(root, "test.db"));
   migrate(db);
   storage = createLocalStorage(root);
-  app = buildApp({
-    config: loadConfig({
+  const config = loadConfig({
       INGEST_HMAC_SECRET: "s".repeat(32),
       ADMIN_BOOTSTRAP_TOKEN: adminToken,
       SIGNED_URL_SECRET: "b".repeat(32),
       PUBLIC_BASE_URL: "https://mail.example.test",
       DATA_DIR: root,
-    }),
+    });
+  const adminAuthGuard = createAdminAuthGuard(db, config.adminBootstrapToken);
+  app = buildApp({
+    config,
     db,
     storage,
+    adminAuthGuard,
   });
 });
 

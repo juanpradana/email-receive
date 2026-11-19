@@ -10,6 +10,7 @@ import { loadConfig } from "../../src/config.js";
 import { openDb } from "../../src/db/client.js";
 import { migrate } from "../../src/db/migrate.js";
 import { createLocalStorage } from "../../src/services/storage.js";
+import { createAdminAuthGuard } from "../../src/auth/apiKey.js";
 
 const secret = "s".repeat(32);
 let root: string;
@@ -20,17 +21,20 @@ beforeEach(async () => {
   root = mkdtempSync(path.join(os.tmpdir(), "email-receive-ingest-"));
   db = openDb(path.join(root, "test.db"));
   migrate(db);
-  app = buildApp({
-    config: loadConfig({
+  const config = loadConfig({
       INGEST_HMAC_SECRET: secret,
       ADMIN_BOOTSTRAP_TOKEN: "admin-bootstrap-token",
       SIGNED_URL_SECRET: "b".repeat(32),
       PUBLIC_BASE_URL: "https://mail.example.test",
       DATA_DIR: root,
       MAX_MESSAGE_BYTES: "2048",
-    }),
+    });
+  const adminAuthGuard = createAdminAuthGuard(db, config.adminBootstrapToken);
+  app = buildApp({
+    config,
     db,
     storage: createLocalStorage(root),
+    adminAuthGuard,
   });
 
   const tenant = await app.inject({

@@ -7,9 +7,11 @@ import { ZodError } from "zod";
 import type { AppConfig } from "./config.js";
 import type { Storage } from "./services/storage.js";
 import type { MailProvider } from "./services/mail/provider.js";
-import { requireAdminToken } from "./auth/apiKey.js";
+import { requireAdminToken, createAdminAuthGuard } from "./auth/apiKey.js";
+import type { AdminAuthGuard } from "./auth/apiKey.js";
 import { healthRoutes } from "./routes/health.js";
 import { adminRoutes } from "./routes/admin.js";
+import { adminAuthRoutes } from "./routes/adminAuth.js";
 import { ingestRoutes } from "./routes/ingest.js";
 import { messageRoutes } from "./routes/messages.js";
 import { outboundRoutes } from "./routes/outbound.js";
@@ -23,6 +25,8 @@ export interface AppDependencies {
   mailProvider?: MailProvider | null;
   /** Directory the webmail SPA is built into; when present, it is served as static files. */
   webDist?: string;
+  /** Admin authentication guard (session + legacy token). */
+  adminAuthGuard: AdminAuthGuard;
 }
 
 /** Serves the built webmail SPA from `webDist` if that directory exists. */
@@ -60,7 +64,7 @@ export function buildApp(deps: AppDependencies): FastifyInstance {
     bodyLimit: deps.config.maxMessageBytes,
   });
 
-  app.decorate("deps", deps);
+  app.decorate("deps", { ...deps, adminAuthGuard: deps.adminAuthGuard });
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof ZodError) {
       return reply.code(400).send({
@@ -81,8 +85,12 @@ export function buildApp(deps: AppDependencies): FastifyInstance {
   app.register(outboundRoutes);
   app.register(webhookRoutes);
 
+  // Public admin auth routes (login/logout) — no auth required
+  app.register(adminAuthRoutes);
+
+  // Protected admin routes — require admin session or legacy token
   app.register(async (adminApp) => {
-    adminApp.addHook("preHandler", requireAdminToken(deps.config.adminBootstrapToken));
+    adminApp.addHook("preHandler", deps.adminAuthGuard.authenticateAdmin);
     adminApp.register(adminRoutes);
   });
 

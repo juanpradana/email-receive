@@ -10,6 +10,8 @@ const envSchema = z.object({
   PUBLIC_BASE_URL: z.string().url(),
   INGEST_HMAC_SECRET: z.string().min(32),
   ADMIN_BOOTSTRAP_TOKEN: z.string().min(16),
+  ADMIN_BOOTSTRAP_EMAIL: z.string().email().optional(),
+  ADMIN_BOOTSTRAP_PASSWORD: z.string().min(8).optional(),
   MAX_MESSAGE_BYTES: z.coerce.number().int().positive().default(26_214_400),
   DEDUPE_WINDOW_HOURS: z.coerce.number().int().nonnegative().default(24),
   SIGNED_URL_SECRET: z.string().min(32),
@@ -30,6 +32,8 @@ export interface AppConfig {
   publicBaseUrl: string;
   ingestHmacSecret: string;
   adminBootstrapToken: string;
+  adminBootstrapEmail?: string;
+  adminBootstrapPassword?: string;
   maxMessageBytes: number;
   dedupeWindowHours: number;
   signedUrlSecret: string;
@@ -63,6 +67,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     publicBaseUrl: parsed.data.PUBLIC_BASE_URL.replace(/\/$/, ""),
     ingestHmacSecret: parsed.data.INGEST_HMAC_SECRET,
     adminBootstrapToken: parsed.data.ADMIN_BOOTSTRAP_TOKEN,
+    adminBootstrapEmail: parsed.data.ADMIN_BOOTSTRAP_EMAIL,
+    adminBootstrapPassword: parsed.data.ADMIN_BOOTSTRAP_PASSWORD,
     maxMessageBytes: parsed.data.MAX_MESSAGE_BYTES,
     dedupeWindowHours: parsed.data.DEDUPE_WINDOW_HOURS,
     signedUrlSecret: parsed.data.SIGNED_URL_SECRET,

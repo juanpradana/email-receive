@@ -5,6 +5,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildApp } from "../../src/app.js";
 import { loadConfig } from "../../src/config.js";
+import { migrate } from "../../src/db/migrate.js";
+import { createAdminAuthGuard } from "../../src/auth/apiKey.js";
 
 const storage = {
   putRaw: async () => "",
@@ -17,6 +19,7 @@ const storage = {
 
 function makeApp(overrides: { dataDir?: string } = {}) {
   const db = new Database(":memory:");
+  migrate(db);
   const config = loadConfig({
     INGEST_HMAC_SECRET: "a".repeat(32),
     ADMIN_BOOTSTRAP_TOKEN: "admin-bootstrap-token",
@@ -24,7 +27,8 @@ function makeApp(overrides: { dataDir?: string } = {}) {
     PUBLIC_BASE_URL: "https://mail.example.test",
   });
   if (overrides.dataDir) config.dataDir = overrides.dataDir;
-  const app = buildApp({ config, db, storage });
+  const adminAuthGuard = createAdminAuthGuard(db, config.adminBootstrapToken);
+  const app = buildApp({ config, db, storage, adminAuthGuard });
   return { app, db };
 }
 

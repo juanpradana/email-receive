@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../../src/app.js";
-import { generateApiKey } from "../../src/auth/apiKey.js";
+import { generateApiKey, createAdminAuthGuard } from "../../src/auth/apiKey.js";
 import { openDb } from "../../src/db/client.js";
 import { migrate } from "../../src/db/migrate.js";
 import { createApiKeysRepo } from "../../src/db/repo/apiKeys.js";
@@ -74,16 +74,19 @@ beforeEach(() => {
   db = openDb(path.join(root, "test.db"));
   migrate(db);
   storage = createLocalStorage(root);
-  app = buildApp({
-    config: loadConfig({
+  const config = loadConfig({
       INGEST_HMAC_SECRET: "s".repeat(32),
       ADMIN_BOOTSTRAP_TOKEN: "admin-bootstrap-token",
       SIGNED_URL_SECRET: "b".repeat(32),
       PUBLIC_BASE_URL: "https://mail.example.test",
       DATA_DIR: root,
-    }),
+    });
+  const adminAuthGuard = createAdminAuthGuard(db, config.adminBootstrapToken);
+  app = buildApp({
+    config,
     db,
     storage,
+    adminAuthGuard,
   });
   tenantId = createTenant("Acme");
 });

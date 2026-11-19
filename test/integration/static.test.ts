@@ -7,23 +7,27 @@ import { buildApp } from "../../src/app.js";
 import { loadConfig } from "../../src/config.js";
 import { openDb } from "../../src/db/client.js";
 import { migrate } from "../../src/db/migrate.js";
+import { createAdminAuthGuard } from "../../src/auth/apiKey.js";
 
 let root: string;
 let db: Database.Database;
 let app: ReturnType<typeof buildApp> | undefined;
 
 function makeApp(webDist?: string) {
+  const config = loadConfig({
+    INGEST_HMAC_SECRET: "a".repeat(32),
+    ADMIN_BOOTSTRAP_TOKEN: "admin-bootstrap-token",
+    SIGNED_URL_SECRET: "b".repeat(32),
+    PUBLIC_BASE_URL: "https://mail.example.test",
+  });
+  const adminAuthGuard = createAdminAuthGuard(db, config.adminBootstrapToken);
   return buildApp({
-    config: loadConfig({
-      INGEST_HMAC_SECRET: "a".repeat(32),
-      ADMIN_BOOTSTRAP_TOKEN: "admin-bootstrap-token",
-      SIGNED_URL_SECRET: "b".repeat(32),
-      PUBLIC_BASE_URL: "https://mail.example.test",
-    }),
+    config,
     db,
     storage: {} as never,
     mailProvider: null,
     webDist,
+    adminAuthGuard,
   });
 }
 

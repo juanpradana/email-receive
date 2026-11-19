@@ -1,9 +1,15 @@
 import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import { createHash } from "node:crypto";
 import type { FastifyReply, FastifyRequest } from "fastify";
+import type Database from "better-sqlite3";
+import { createAdminSessionsRepo, createAdminUsersRepo } from "../db/repo/adminUsers.js";
+import { hashPassword, verifyPassword, generateSessionToken } from "./password.js";
+import { newId } from "../db/client.js";
 import type { ApiKeysRepo, ApiScope } from "../db/repo/apiKeys.js";
 
 const KEY_PREFIX = "ek_";
 const SCRYPT_KEYLEN = 32;
+const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
 export function hashApiKey(plaintext: string): string {
   const salt = randomBytes(16);
@@ -25,10 +31,23 @@ export function generateApiKey(): { plaintext: string; prefix: string; hash: str
   return { plaintext, prefix: secret.slice(0, 8), hash: hashApiKey(plaintext) };
 }
 
+export function generateAdminSessionToken(): string {
+  return generateSessionToken();
+}
+
+export function hashAdminSessionToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
 export interface AuthContext {
   tenantId: string;
   keyId: string;
   scopes: ApiScope[];
+}
+
+export interface AdminAuthContext {
+  kind: "admin-session" | "legacy-token";
+  userId?: string;
 }
 
 export interface ApiKeyGuard {
@@ -89,8 +108,77 @@ export function requireAdminToken(expected: string) {
   };
 }
 
+export interface AdminAuthGuard {
+  authenticateAdmin: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
+  login(email: string, password: string): Promise<string | null>;
+  logout(token: string): Promise<boolean>;
+  ensureBootstrapUser(email: string, password: string): void;
+}
+
+export function createAdminAuthGuard(db: Database.Database, legacyToken: string): AdminAuthGuard {
+  const users = createAdminUsersRepo(db);
+  const sessions = createAdminSessionsRepo(db);
+
+  const authenticateAdmin = async (request: FastifyRequest, reply: FastifyReply) => {
+    const token = bearer(request.headers.authorization);
+    if (!token) {
+      await reply.code(401).send({ error: "unauthorized" });
+      return;
+    }
+
+    const legacy = Buffer.from(token);
+    const legacyExpected = Buffer.from(legacyToken);
+    if (legacy.length === legacyExpected.length && timingSafeEqual(legacy, legacyExpected)) {
+      request.adminAuth = { kind: "legacy-token" };
+      return;
+    }
+
+    const session = sessions.findActiveByTokenHash(hashAdminSessionToken(token));
+    if (session) {
+      request.adminAuth = { kind: "admin-session", userId: session.user_id };
+      return;
+    }
+
+    await reply.code(401).send({ error: "unauthorized" });
+  };
+
+  const createSession = (userId: string, ttlMs: number) => {
+    const token = generateSessionToken();
+    sessions.create(userId, hashAdminSessionToken(token), ttlMs);
+    return token;
+  };
+
+  const login = async (email: string, password: string): Promise<string | null> => {
+    const user = users.findByEmail(email);
+    if (!user || !verifyPassword(password, user.password_hash)) return null;
+    return createSession(user.id, SESSION_TTL_MS);
+  };
+
+  const logout = async (token: string): Promise<boolean> => {
+    return sessions.deleteByTokenHash(hashAdminSessionToken(token));
+  };
+
+  const ensureBootstrapUser = (email: string, password: string) => {
+    const existing = users.findByEmail(email);
+    if (existing) {
+      db.prepare("UPDATE admin_users SET password_hash = ? WHERE id = ?").run(hashPassword(password), existing.id);
+      return;
+    }
+    const id = newId();
+    db.prepare("INSERT INTO admin_users (id, email, password_hash, created_at) VALUES (?, ?, ?, ?)").run(
+      id,
+      email,
+      hashPassword(password),
+      new Date().toISOString(),
+    );
+  };
+
+  return { authenticateAdmin, login, logout, ensureBootstrapUser };
+}
+
 declare module "fastify" {
   interface FastifyRequest {
     auth?: AuthContext;
+    adminAuth?: AdminAuthContext;
   }
 }

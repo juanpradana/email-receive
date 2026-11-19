@@ -197,4 +197,21 @@ export function migrate(db: Database.Database): void {
   // cannot add tables with new foreign keys to existing parents without a
   // rebuild, and every consumer of this schema runs migrate() at boot.
   db.exec(OUTBOUND_SQL);
+
+  db.exec(`
+CREATE TABLE IF NOT EXISTS admin_users (
+  id TEXT PRIMARY KEY,
+  email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  password_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS admin_sessions (
+  token_hash TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS admin_sessions_user ON admin_sessions(user_id, expires_at DESC);
+`);
 }

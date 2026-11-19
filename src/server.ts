@@ -9,6 +9,7 @@ import { processPending } from "./services/pipeline.js";
 import { deliverPending } from "./services/webhooks.js";
 import { deliverOutboundPending } from "./services/outbound.js";
 import { purgeExpired, resetHourlyUsage } from "./jobs/retention.js";
+import { createAdminAuthGuard } from "./auth/apiKey.js";
 
 const PIPELINE_INTERVAL_MS = 5_000;
 const WEBHOOK_INTERVAL_MS = 2_000;
@@ -35,8 +36,13 @@ if (config.resendApiKey) {
   }
 }
 
-const app = buildApp({ config, db, storage, mailProvider, webDist });
+const adminAuthGuard = createAdminAuthGuard(db, config.adminBootstrapToken);
+adminAuthGuard.ensureBootstrapUser(
+  config.adminBootstrapEmail ?? "admin@localhost",
+  config.adminBootstrapPassword ?? "change-me",
+);
 
+const app = buildApp({ config, db, storage, mailProvider, webDist, adminAuthGuard });
 try {
   await app.listen({ port: config.port, host: config.host });
 } catch (error) {

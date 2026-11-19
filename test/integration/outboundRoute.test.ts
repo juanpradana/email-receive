@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildApp } from "../../src/app.js";
-import { generateApiKey } from "../../src/auth/apiKey.js";
+import { generateApiKey, createAdminAuthGuard } from "../../src/auth/apiKey.js";
 import { loadConfig } from "../../src/config.js";
 import { openDb } from "../../src/db/client.js";
 import { migrate } from "../../src/db/migrate.js";
@@ -15,20 +15,23 @@ let provider: MailProvider;
 let sent: Array<{ fromAddr: string; to: string[]; subject: string }>;
 
 function makeApp(hourlyLimit = 10) {
+  const config = {
+    ...loadConfig({
+      INGEST_HMAC_SECRET: "a".repeat(32),
+      ADMIN_BOOTSTRAP_TOKEN: "admin-bootstrap-token",
+      SIGNED_URL_SECRET: "b".repeat(32),
+      PUBLIC_BASE_URL: "https://mail.example.test",
+    }),
+    resendApiKey: "test-key",
+    outboundRateLimitPerHour: hourlyLimit,
+  };
+  const adminAuthGuard = createAdminAuthGuard(db, config.adminBootstrapToken);
   return buildApp({
-    config: {
-      ...loadConfig({
-        INGEST_HMAC_SECRET: "a".repeat(32),
-        ADMIN_BOOTSTRAP_TOKEN: "admin-bootstrap-token",
-        SIGNED_URL_SECRET: "b".repeat(32),
-        PUBLIC_BASE_URL: "https://mail.example.test",
-      }),
-      resendApiKey: "test-key",
-      outboundRateLimitPerHour: hourlyLimit,
-    },
+    config,
     db,
     storage: {} as never,
     mailProvider: provider,
+    adminAuthGuard,
   });
 }
 
@@ -227,8 +230,7 @@ describe("POST /v1/outbound", () => {
     migrate(db);
     const previous = provider;
     provider = undefined as unknown as MailProvider;
-    app = buildApp({
-      config: {
+    const config = {
         ...loadConfig({
           INGEST_HMAC_SECRET: "a".repeat(32),
           ADMIN_BOOTSTRAP_TOKEN: "admin-bootstrap-token",
@@ -236,10 +238,14 @@ describe("POST /v1/outbound", () => {
           PUBLIC_BASE_URL: "https://mail.example.test",
         }),
         resendApiKey: undefined,
-      },
+      };
+    const adminAuthGuard = createAdminAuthGuard(db, config.adminBootstrapToken);
+    app = buildApp({
+      config,
       db,
       storage: {} as never,
       mailProvider: null,
+      adminAuthGuard,
     });
     const tenant = createTenant("Acme", "acme.test");
 

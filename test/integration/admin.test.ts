@@ -4,6 +4,7 @@ import { buildApp } from "../../src/app.js";
 import { loadConfig } from "../../src/config.js";
 import { migrate } from "../../src/db/migrate.js";
 import { openDb } from "../../src/db/client.js";
+import { createAdminAuthGuard } from "../../src/auth/apiKey.js";
 
 let db: Database.Database;
 let app: ReturnType<typeof buildApp>;
@@ -12,6 +13,7 @@ const adminToken = "admin-bootstrap-token";
 beforeEach(() => {
   db = openDb(":memory:");
   migrate(db);
+  const adminAuthGuard = createAdminAuthGuard(db, adminToken);
   app = buildApp({
     config: loadConfig({
       INGEST_HMAC_SECRET: "a".repeat(32),
@@ -21,6 +23,7 @@ beforeEach(() => {
     }),
     db,
     storage: {} as never,
+    adminAuthGuard,
   });
 });
 afterEach(async () => {

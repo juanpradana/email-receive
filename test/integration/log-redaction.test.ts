@@ -4,6 +4,7 @@ import { buildApp } from "../../src/app.js";
 import { loadConfig } from "../../src/config.js";
 import { openDb } from "../../src/db/client.js";
 import { migrate } from "../../src/db/migrate.js";
+import { createAdminAuthGuard } from "../../src/auth/apiKey.js";
 
 describe("logger secret redaction", () => {
   it("configures the app logger to redact Authorization in nested err objects", async () => {
@@ -17,15 +18,18 @@ describe("logger secret redaction", () => {
 
     const db = openDb(":memory:");
     migrate(db);
+    const config = loadConfig({
+      INGEST_HMAC_SECRET: "a".repeat(32),
+      ADMIN_BOOTSTRAP_TOKEN: "admin-bootstrap-token",
+      SIGNED_URL_SECRET: "b".repeat(32),
+      PUBLIC_BASE_URL: "https://mail.example.test",
+    });
+    const adminAuthGuard = createAdminAuthGuard(db, config.adminBootstrapToken);
     const app = buildApp({
-      config: loadConfig({
-        INGEST_HMAC_SECRET: "a".repeat(32),
-        ADMIN_BOOTSTRAP_TOKEN: "admin-bootstrap-token",
-        SIGNED_URL_SECRET: "b".repeat(32),
-        PUBLIC_BASE_URL: "https://mail.example.test",
-      }),
+      config,
       db,
       storage: {} as never,
+      adminAuthGuard,
     });
 
     // Redirect the logger to our sink so we can capture output.

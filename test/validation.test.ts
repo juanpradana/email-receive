@@ -1,7 +1,7 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
-import { generateApiKey } from "../src/auth/apiKey.js";
+import { generateApiKey, createAdminAuthGuard } from "../src/auth/apiKey.js";
 import { loadConfig } from "../src/config.js";
 import { openDb } from "../src/db/client.js";
 import { migrate } from "../src/db/migrate.js";
@@ -15,20 +15,23 @@ let app: ReturnType<typeof buildApp>;
 let provider: MailProvider;
 
 function makeApp() {
+  const config = {
+    ...loadConfig({
+      INGEST_HMAC_SECRET: "a".repeat(32),
+      ADMIN_BOOTSTRAP_TOKEN: "admin-bootstrap-token",
+      SIGNED_URL_SECRET: "b".repeat(32),
+      PUBLIC_BASE_URL: "https://mail.example.test",
+    }),
+    resendApiKey: "test-key",
+    outboundRateLimitPerHour: 10,
+  };
+  const adminAuthGuard = createAdminAuthGuard(db, config.adminBootstrapToken);
   return buildApp({
-    config: {
-      ...loadConfig({
-        INGEST_HMAC_SECRET: "a".repeat(32),
-        ADMIN_BOOTSTRAP_TOKEN: "admin-bootstrap-token",
-        SIGNED_URL_SECRET: "b".repeat(32),
-        PUBLIC_BASE_URL: "https://mail.example.test",
-      }),
-      resendApiKey: "test-key",
-      outboundRateLimitPerHour: 10,
-    },
+    config,
     db,
     storage: {} as never,
     mailProvider: provider,
+    adminAuthGuard,
   });
 }
 
