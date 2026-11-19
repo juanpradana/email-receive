@@ -34,6 +34,10 @@ Salin `.env.example` menjadi `.env` lalu isi:
 | `INGEST_HMAC_SECRET` | ya | — | Minimal 32 karakter; dipakai Worker dan API |
 | `ADMIN_BOOTSTRAP_TOKEN` | ya | — | Minimal 16 karakter; header `Authorization: Bearer …` untuk route admin |
 | `SIGNED_URL_SECRET` | ya | — | Minimal 32 karakter; disiapkan untuk URL bertanda tangan |
+| `RESEND_API_KEY` | tidak | — | Kunci API Resend untuk email keluar; tanpa ini outbound mengembalikan `mail_provider_not_configured` |
+| `ADMIN_BOOTSTRAP_EMAIL` | tidak | `admin@localhost` | Email admin untuk login `/admin`; di-seed otomatis saat `admin_users` kosong |
+| `ADMIN_BOOTSTRAP_PASSWORD` | tidak | `change-me` | Password admin; minimal 8 karakter |
+| `OUTBOUND_RATE_LIMIT_PER_HOUR` | tidak | `10` | Batas pengalian per tenant per jam UTC |
 | `DATA_DIR` | tidak | `./data` | Akar file `.eml`, HTML, attachment; di container memakai `/data` |
 | `DB_PATH` | tidak | `<DATA_DIR>/email.db` | Lokasi SQLite |
 | `PORT` / `HOST` | tidak | `3000` / `0.0.0.0` | Bind API |
@@ -197,7 +201,7 @@ cd worker && npm test    # suite Email Worker
 
 ---
 
-## Personal email (inbound + outbound) — `@farzani.my.id`
+## Personal email (inbound + outbound)
 
 ### Overview
 
@@ -205,32 +209,32 @@ This API supports **full personal email** on a custom domain without upgrading C
 
 | Direction | How it works |
 |-----------|--------------|
-| **Inbound** | Cloudflare Email Routing rule `to = me@farzani.my.id` → Worker `email-receive-forwarder` → `POST /v1/ingest`. Catch-all Gmail is untouched. |
-| **Outbound** | `POST /v1/outbound` → `MailProvider` abstraction → **Resend free tier** (3 000/mo, 100/day). Domain verified via `send.farzani.my.id` subdomain. |
+| **Inbound** | Cloudflare Email Routing rule `to = you@yourdomain.com` → Worker `email-receive-forwarder` → `POST /v1/ingest`. Catch-all Gmail is untouched. |
+| **Outbound** | `POST /v1/outbound` → `MailProvider` abstraction → **Resend free tier** (3 000/mo, 100/day). Domain verified via `send.yourdomain.com` subdomain. |
 | **Webmail** | React + Vite SPA in `web/`, built to `web/dist`, served by the API at `/`. Auth via tenant API key in localStorage. |
 
 ### Setup (manual, one-time)
 
-1. **Resend dashboard** → add `farzani.my.id` → copy the SPF/DKIM/DMARC records.
-2. **Cloudflare DNS** → add those records for subdomain `send.farzani.my.id` (do not proxy).
+1. **Resend dashboard** → add `yourdomain.com` → copy the SPF/DKIM/DMARC records.
+2. **Cloudflare DNS** → add those records for subdomain `send.yourdomain.com` (do not proxy).
 3. **Resend** → create API key → put as `RESEND_API_KEY` in `.env`.
-4. **API tenant** → `POST /v1/admin/tenants` → `POST /v1/admin/tenants/:id/domains {domain:"farzani.my.id"}` → `POST /v1/admin/tenants/:id/keys {scopes:["read","admin"]}`.
+4. **API tenant** → `POST /v1/admin/tenants` → `POST /v1/admin/tenants/:id/domains {domain:"yourdomain.com"}` → `POST /v1/admin/tenants/:id/keys {scopes:["read","admin"]}`.
 5. **Cloudflare Email Routing** → rule:
    ```
-   wrangler email routing rules create farzani.my.id \
+   wrangler email routing rules create yourdomain.com \
      --match-type literal --match-field to \
-     --match-value "me@farzani.my.id" \
+     --match-value "you@yourdomain.com" \
      --action-type worker --action-value "email-receive-forwarder" \
-     --priority 1 --name "personal inbox: me@farzani.my.id"
+     --priority 1 --name "personal inbox: you@yourdomain.com"
    ```
    Priority `1` places it before the existing catch-all.
 6. **Test send** (curl or webmail Compose):
    ```
    curl -X POST $BASE/v1/outbound -H "Authorization: Bearer $KEY" \
-     -d '{"fromAddr":"me@farzani.my.id","to":["someone@gmail.com"],"subject":"uji","text":"halo"}'
+     -d '{"fromAddr":"you@yourdomain.com","to":["someone@gmail.com"],"subject":"uji","text":"halo"}'
    ```
    Expect `202 {accepted:true}`. The provider rejects unverified domains immediately; status=`failed`, error surfaced in list/detail.
-7. **Receive** → email to `me@farzani.my.id` appears in `GET /v1/messages` and in the webmail Inbox.
+7. **Receive** → email to `you@yourdomain.com` appears in `GET /v1/messages` and in the webmail Inbox.
 
 ### Rate limit
 
@@ -244,6 +248,31 @@ npm install
 npm run build   # produces web/dist
 ```
 Start the API; the SPA is served at `/`. Open in a browser, enter base URL + API key + default From address, then Compose / Inbox / Read / Reply.
+
+### Admin UI
+
+The admin panel is served at `/admin` and requires a database admin user:
+
+1. Set `ADMIN_BOOTSTRAP_EMAIL` and `ADMIN_BOOTSTRAP_PASSWORD` in `.env` (both optional; defaults are `admin@localhost` / `change-me`).
+2. On first start, `ensureBootstrapUser` seeds the admin if the `admin_users` table is empty.
+3. Open `https://yourdomain.com/admin` → sign in with email + password → session token stored in localStorage (24h).
+4. Dashboard: create tenants, add domains, create/revoke `ek_` API keys, and generate user-ready `baseUrl`/`apiKey`/`fromAddr` in the **User Setup** tab.
+5. Legacy `ADMIN_BOOTSTRAP_TOKEN` still works for API-only scripts (`Authorization: Bearer <token>`).
+
+### Docker deployment (production)
+
+The multi-stage Dockerfile builds the web SPA into the image (`web/dist` served by `@fastify/static`).
+
+```bash
+cp .env.example .env   # isi nilai sungguhan
+docker compose up -d --build
+curl -fsS https://yourdomain.com/healthz
+curl -fsS https://yourdomain.com/readyz
+```
+
+- Image runs as non-root user `10001`, volume `/data`, root filesystem read-only.
+- API binds to Docker bridge `172.17.0.1:3000` (NOT `0.0.0.0`) — reachable from host at `http://172.17.0.1:3000`, and via reverse proxy (Caddy example in `Caddyfile.example`) at public HTTPS.
+- `env_file: .env` in `docker-compose.yml` loads all config; secrets never baked into image.
 
 ### Architecture notes
 

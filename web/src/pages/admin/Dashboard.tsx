@@ -424,7 +424,7 @@ function UserSetupPanel({
             <input
               value={domain}
               onChange={(e) => setDomain(e.target.value)}
-              placeholder="farzani.my.id"
+              placeholder="yourdomain.com"
               style={styles.input}
             />
           </label>
