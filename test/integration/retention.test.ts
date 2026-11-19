@@ -5,9 +5,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openDb } from "../../src/db/client.js";
 import { migrate } from "../../src/db/migrate.js";
 import { createMessagesRepo } from "../../src/db/repo/messages.js";
+import { createTenantSmtpConfigsRepo } from "../../src/db/repo/tenantSmtpConfigs.js";
 import { createTenantsRepo } from "../../src/db/repo/tenants.js";
 import { createLocalStorage } from "../../src/services/storage.js";
-import { purgeExpired } from "../../src/jobs/retention.js";
+import { purgeExpired, resetHourlyUsage } from "../../src/jobs/retention.js";
 
 let root: string;
 let db: ReturnType<typeof openDb>;
@@ -80,5 +81,21 @@ describe("message retention", () => {
     expect(existsSync(old.rawPath)).toBe(true);
     expect(existsSync(old.htmlPath)).toBe(true);
     expect(existsSync(old.attachmentPath)).toBe(true);
+  });
+});
+
+describe("outbound hourly usage reset", () => {
+  it("clears last hour's counter and leaves the current hour alone", () => {
+    const configs = createTenantSmtpConfigsRepo(db);
+    configs.consume(tenantId, { hourlyLimit: 5, now: "2026-11-18T10:05:00.000Z" });
+    configs.consume(tenantId, { hourlyLimit: 5, now: "2026-11-18T10:06:00.000Z" });
+    expect(configs.find(tenantId)!.hourly_used).toBe(2);
+
+    resetHourlyUsage(db, new Date("2026-11-18T10:30:00.000Z"));
+    expect(configs.find(tenantId)!.hourly_used).toBe(2);
+
+    resetHourlyUsage(db, new Date("2026-11-18T11:00:00.000Z"));
+    expect(configs.find(tenantId)!.hourly_used).toBe(0);
+    expect(configs.find(tenantId)!.hour_started).toBe("2026-11-18T11:00:00.000Z");
   });
 });
